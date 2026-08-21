@@ -1,0 +1,226 @@
+{
+  "templates": [
+    {
+      "id": "a9895e24",
+      "name": "Plantilla prueba",
+      "width": 1200,
+      "height": 1800,
+      "slots": [
+        {
+          "id": "epz8sz0tncr",
+          "photoIndex": 1,
+          "x": 41,
+          "y": 45,
+          "w": 518,
+          "h": 354
+        },
+        {
+          "id": "fizppu1udz",
+          "photoIndex": 2,
+          "x": 40,
+          "y": 432,
+          "w": 506,
+          "h": 342
+        },
+        {
+          "id": "bp9enm1lby",
+          "photoIndex": 3,
+          "x": 53,
+          "y": 818,
+          "w": 498,
+          "h": 330
+        },
+        {
+          "id": "2c6w0ujgwv7",
+          "photoIndex": 4,
+          "x": 52,
+          "y": 1200,
+          "w": 498,
+          "h": 330
+        },
+        {
+          "id": "4duip70g8ot",
+          "photoIndex": 1,
+          "x": 646,
+          "y": 56,
+          "w": 498,
+          "h": 330
+        },
+        {
+          "id": "wwhgqrqkrm",
+          "photoIndex": 2,
+          "x": 646,
+          "y": 435,
+          "w": 498,
+          "h": 330
+        },
+        {
+          "id": "1e4dv9az85b",
+          "photoIndex": 3,
+          "x": 648,
+          "y": 815,
+          "w": 498,
+          "h": 330
+        },
+        {
+          "id": "v0dvo44rtfd",
+          "photoIndex": 4,
+          "x": 651,
+          "y": 1201,
+          "w": 498,
+          "h": 330
+        }
+      ],
+      "background": true,
+      "createdAt": "2026-04-23T12:58:12.367756"
+    },
+    {
+      "id": "dd2d9798",
+      "name": "LEONES",
+      "width": 1200,
+      "height": 1800,
+      "slots": [
+        {
+          "id": "ke2m5cz3s2",
+          "photoIndex": 2,
+          "x": 42,
+          "y": 456,
+          "w": 526,
+          "h": 354
+        },
+        {
+          "id": "x737wi9ucv",
+          "photoIndex": 1,
+          "x": 634,
+          "y": 63,
+          "w": 524,
+          "h": 352
+        },
+        {
+          "id": "8y1qpgw5nlf",
+          "photoIndex": 1,
+          "x": 42,
+          "y": 63,
+          "w": 526,
+          "h": 351
+        },
+        {
+          "id": "qwtyj99p9d",
+          "photoIndex": 2,
+          "x": 632,
+          "y": 455,
+          "w": 526,
+          "h": 353
+        },
+        {
+          "id": "4bu6cu3m8df",
+          "photoIndex": 3,
+          "x": 42,
+          "y": 849,
+          "w": 525,
+          "h": 353
+        },
+        {
+          "id": "suxtu8j41g",
+          "photoIndex": 3,
+          "x": 632,
+          "y": 849,
+          "w": 526,
+          "h": 354
+        },
+        {
+          "id": "ouhwe9rdyh",
+          "photoIndex": 4,
+          "x": 43,
+          "y": 1244,
+          "w": 524,
+          "h": 352
+        },
+        {
+          "id": "13a3rrz4rurd",
+          "photoIndex": 4,
+          "x": 633,
+          "y": 1245,
+          "w": 525,
+          "h": 352
+        }
+      ],
+      "background": true,
+      "createdAt": "2026-05-01T16:56:13.310821"
+    },
+    {
+      "id": "4e119f18",
+      "name": "IAN ELISEO",
+      "width": 1200,
+      "height": 1800,
+      "slots": [
+        {
+          "id": "fwpu8cqkini",
+          "photoIndex": 1,
+          "x": 39,
+          "y": 45,
+          "w": 522,
+          "h": 350
+        },
+        {
+          "id": "wp5g32sxr3",
+          "photoIndex": 1,
+          "x": 637,
+          "y": 45,
+          "w": 522,
+          "h": 350
+        },
+        {
+          "id": "q2j829nrba",
+          "photoIndex": 2,
+          "x": 39,
+          "y": 449,
+          "w": 522,
+          "h": 350
+        },
+        {
+          "id": "bd7jp8z0yei",
+          "photoIndex": 2,
+          "x": 637,
+          "y": 449,
+          "w": 522,
+          "h": 350
+        },
+        {
+          "id": "cdkdn0xx3ce",
+          "photoIndex": 3,
+          "x": 39,
+          "y": 853,
+          "w": 522,
+          "h": 350
+        },
+        {
+          "id": "ob3nvplvnnh",
+          "photoIndex": 3,
+          "x": 637,
+          "y": 853,
+          "w": 522,
+          "h": 350
+        },
+        {
+          "id": "szwkw2angrk",
+          "photoIndex": 4,
+          "x": 39,
+          "y": 1255,
+          "w": 522,
+          "h": 350
+        },
+        {
+          "id": "kauhw0hq5m",
+          "photoIndex": 4,
+          "x": 637,
+          "y": 1255,
+          "w": 522,
+          "h": 350
+        }
+      ],
+      "background": true,
+      "createdAt": "2026-06-20T18:02:26.657894"
+    }
+  ]
+}

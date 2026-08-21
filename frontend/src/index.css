@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: #09090B;
+    color: #FAFAFA;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Scrollbar invisible */
+  ::-webkit-scrollbar { display: none; }
+}
+
+@layer utilities {
+  /* Texto con gradiente pink → red */
+  .gradient-text {
+    background: linear-gradient(135deg, #FF2D78 0%, #CC0000 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Texto con gradiente animado (banner) */
+  .gradient-text-anim {
+    background: linear-gradient(90deg, #FF2D78, #CC0000, #10B981, #FF2D78);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: shimmer 3s linear infinite;
+  }
+
+  /* Card glassmorphism */
+  .glass {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+  }
+
+  /* Glow rosa */
+  .glow-pink {
+    box-shadow: 0 0 24px rgba(255, 45, 120, 0.5),
+                0 0 48px rgba(255, 45, 120, 0.2);
+  }
+
+  /* Glow rojo */
+  .glow-red {
+    box-shadow: 0 0 24px rgba(204, 0, 0, 0.5),
+                0 0 48px rgba(204, 0, 0, 0.2);
+  }
+}

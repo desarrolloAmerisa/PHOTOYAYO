@@ -1,0 +1,19 @@
+{
+  "camera_index": 0,
+  "printer_name": "DS-RX1",
+  "flip_horizontal": true,
+  "flip_vertical": false,
+  "autofocus": false,
+  "focus": 0,
+  "print_config": {
+    "paper_preset": "4x6",
+    "paper_w_in": 4.0,
+    "paper_h_in": 6.0,
+    "orientation": "landscape",
+    "margin_top_mm": 0,
+    "margin_bottom_mm": 0,
+    "margin_left_mm": 0,
+    "margin_right_mm": 0,
+    "copies": 1
+  }
+}
