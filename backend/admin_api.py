@@ -1,6 +1,6 @@
 """
 Admin API HTTP — aiohttp en puerto 8766.
-
+//caca
 Endpoints:
   GET    /api/events
   POST   /api/events
@@ -337,7 +337,8 @@ def make_admin_app(
         if not (50 <= width <= 8000) or not (50 <= height <= 8000):
             return _err("Dimensiones inválidas (50 – 8 000 px)")
         template_id = body.get("templateId") or None
-        return _ok(em.create_event(name, width, height, photo_count, timer_secs, template_id), 201)
+        ingest_url  = body.get("ingestUrl") or None
+        return _ok(em.create_event(name, width, height, photo_count, timer_secs, template_id, ingest_url), 201)
 
     # ── Actualizar / eliminar evento ──────────────────────────────────────────
     async def update_event(request):
@@ -346,8 +347,7 @@ def make_admin_app(
             body = await request.json()
         except Exception:
             return _err("JSON inválido")
-        result = em.update_event(
-            eid,
+        kwargs = dict(
             name=body.get("name"),
             width=body.get("width"),
             height=body.get("height"),
@@ -355,6 +355,9 @@ def make_admin_app(
             timerSecs=body.get("timerSecs"),
             templateId=body.get("templateId"),  # puede ser None para limpiar
         )
+        if "ingestUrl" in body:
+            kwargs["ingestUrl"] = body.get("ingestUrl") or ""
+        result = em.update_event(eid, **kwargs)
         return _ok(result) if result else _err("Evento no encontrado", 404)
 
     async def delete_event(request):

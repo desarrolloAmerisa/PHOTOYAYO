@@ -272,6 +272,51 @@ def next_session_number(base_dir: str) -> int:
     return n + 1
 
 
+async def upload_to_eca360(ingest_url: str, file_path: str, broadcast=None):
+    """
+    POST multipart field 'file' a la URL de ingest ECA360.
+    Nunca lanza: fallos solo se loguean / se notifican por WS.
+    """
+    url = (ingest_url or "").strip()
+    if not url or not file_path or not os.path.isfile(file_path):
+        return
+    fname = os.path.basename(file_path)
+    try:
+        if broadcast:
+            await broadcast({"type": "ingest_status", "phase": "uploading", "file": fname})
+        from aiohttp import FormData, ClientSession, ClientTimeout
+        raw = open(file_path, "rb").read()
+        data = FormData()
+        data.add_field("file", raw, filename=fname, content_type="image/jpeg")
+        timeout = ClientTimeout(total=45, connect=10)
+        async with ClientSession(timeout=timeout) as session:
+            async with session.post(url, data=data) as resp:
+                body = await resp.text()
+                if resp.status >= 400:
+                    print(f"[ECA360] HTTP {resp.status} al subir {fname}: {body[:200]}")
+                    if broadcast:
+                        await broadcast({
+                            "type": "ingest_status", "phase": "err",
+                            "file": fname, "msg": f"HTTP {resp.status}",
+                        })
+                    return
+                print(f"[ECA360] OK {fname} → {body[:120]}")
+                if broadcast:
+                    await broadcast({
+                        "type": "ingest_status", "phase": "ok", "file": fname,
+                    })
+    except Exception as exc:
+        print(f"[ECA360] Falló upload de {fname}: {exc}")
+        try:
+            if broadcast:
+                await broadcast({
+                    "type": "ingest_status", "phase": "err",
+                    "file": fname, "msg": str(exc),
+                })
+        except Exception:
+            pass
+
+
 # ── Backend ───────────────────────────────────────────────────────────────────
 class PhotoboothBackend:
     def __init__(self):
@@ -534,14 +579,19 @@ class PhotoboothBackend:
             tw = int(photo.shape[1] * th / photo.shape[0])
             _, tbuf = cv2.imencode(".jpg", cv2.resize(photo, (tw, th)),
                                    [cv2.IMWRITE_JPEG_QUALITY, 82])
-            return photo, base64.b64encode(tbuf).decode()
+            return photo, base64.b64encode(tbuf).decode(), path
 
-        photo, photo_b64 = await loop.run_in_executor(self._executor, _process_and_save)
+        photo, photo_b64, photo_path = await loop.run_in_executor(self._executor, _process_and_save)
         self.photo_count += 1
         self.photos_taken.append(photo)
         self.flash_until = time.time() + FLASH_SECS
         print(f"  \U0001f4f7  foto{session_num}_{self.photo_count}.jpg")
         await self.broadcast({"type": "flash", "photoNum": self.photo_count, "photo": photo_b64})
+
+        # ECA360: subir foto en background (no bloquea el booth)
+        ingest_url = (active or {}).get("ingestUrl") or ""
+        if ingest_url:
+            asyncio.create_task(upload_to_eca360(ingest_url, photo_path, self.broadcast))
 
         if self.photo_count >= self.session_burst:
             photos_snap      = list(self.photos_taken)
@@ -549,6 +599,7 @@ class PhotoboothBackend:
             _snum            = self.session_num
             _active_snap     = self.events_mgr.get_active()
             _templates_mgr   = self.templates_mgr
+            _ingest          = (_active_snap or {}).get("ingestUrl") or ""
 
             def _build_strip():
                 tid = _active_snap.get("templateId") if _active_snap else None
@@ -561,12 +612,15 @@ class PhotoboothBackend:
                         strip = make_strip(photos_snap)
                 else:
                     strip = make_strip(photos_snap)
-                cv2.imwrite(os.path.join(_sdir, f"tira{_snum}.jpg"), strip)
+                strip_path = os.path.join(_sdir, f"tira{_snum}.jpg")
+                cv2.imwrite(strip_path, strip)
                 _, buf = cv2.imencode(".jpg", strip, [cv2.IMWRITE_JPEG_QUALITY, 88])
-                return base64.b64encode(buf).decode()
+                return base64.b64encode(buf).decode(), strip_path
 
-            strip_b64          = await loop.run_in_executor(self._executor, _build_strip)
+            strip_b64, strip_path = await loop.run_in_executor(self._executor, _build_strip)
             print(f"  \U0001f39e\ufe0f  tira{_snum}.jpg")
+            if _ingest:
+                asyncio.create_task(upload_to_eca360(_ingest, strip_path, self.broadcast))
             self.state         = "preview"
             self.preview_start = time.time()
             self.palm_cooldown = time.time() + 2.0

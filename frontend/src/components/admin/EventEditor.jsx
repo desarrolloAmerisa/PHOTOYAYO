@@ -256,6 +256,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
   const [photoCount, setPhotoCount] = useState(3)
   const [timerSecs,  setTimerSecs]  = useState(3)
   const [templateId, setTemplateId] = useState(null)   // id de plantilla interactiva
+  const [ingestUrl,  setIngestUrl]  = useState('')     // ECA360 carousel ingest
 
   const [saving,     setSaving]     = useState(false)
   const [deleting,   setDeleting]   = useState(false)
@@ -272,9 +273,10 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
       setPhotoCount(event.photoCount ?? 3)
       setTimerSecs(event.timerSecs ?? 3)
       setTemplateId(event.templateId ?? null)
+      setIngestUrl(event.ingestUrl ?? '')
     } else {
       setName(''); setWidth(600); setHeight(600)
-      setPhotoCount(3); setTimerSecs(3); setTemplateId(null)
+      setPhotoCount(3); setTimerSecs(3); setTemplateId(null); setIngestUrl('')
     }
     setError(null); setSuccess(null)
   }, [event?.id])
@@ -297,6 +299,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
           photoCount: parseInt(photoCount),
           timerSecs:  parseInt(timerSecs),
           templateId: templateId || null,
+          ingestUrl:  ingestUrl.trim() || null,
         }),
       })
       const data = await r.json()
@@ -416,6 +419,18 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
               </div>
             )}
 
+            <Field label="Carrusel ECA360" hint="opcional · URL de ingest">
+              <Input
+                value={ingestUrl}
+                onChange={setIngestUrl}
+                placeholder="https://eca360.com.mx/ingest/boda-ana"
+              />
+              <p className={`text-xs mt-1.5 ${t.textFaint}`}>
+                Si pegas una URL, cada foto y la tira se suben solas al terminar la sesión.
+                Vacío = no sube nada.
+              </p>
+            </Field>
+
             <div className={`p-3 rounded-xl ${t.bgSection} border ${t.borderFaint} ${t.textFaint} text-xs`}>
               Las fotos van en:{" "}
               <span className={`${t.textMuted} font-mono`}>events/Nombre del evento/sessions/foto1_1.jpg</span>…
@@ -505,6 +520,17 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
             </Field>
           </div>
         </div>
+
+        <Field label="Carrusel ECA360" hint="opcional · URL de ingest">
+          <Input
+            value={ingestUrl}
+            onChange={setIngestUrl}
+            placeholder="https://eca360.com.mx/ingest/boda-ana"
+          />
+          <p className={`text-xs mt-1.5 ${t.textFaint}`}>
+            Cada foto y la tira se suben en segundo plano al guardar. Si falla internet, el booth sigue normal.
+          </p>
+        </Field>
 
         {/* Feedback guardar */}
         <AnimatePresence>

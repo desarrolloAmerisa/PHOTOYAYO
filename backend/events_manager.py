@@ -129,9 +129,11 @@ class EventsManager:
 
     def create_event(self, name: str, width: int, height: int,
                       photo_count: int = 3, timer_secs: int = 3,
-                      template_id: str | None = None) -> dict:
+                      template_id: str | None = None,
+                      ingest_url: str | None = None) -> dict:
         clean = slugify_event_name(name)
         eid = self._unique_id(clean)
+        url = (ingest_url or "").strip() or None
         event = {
             "id":          eid,
             "name":        name.strip(),
@@ -140,6 +142,7 @@ class EventsManager:
             "photoCount":  max(1, min(int(photo_count), 10)),
             "timerSecs":   max(1, min(int(timer_secs),  30)),
             "templateId":  template_id,
+            "ingestUrl":   url,
             "hasTemplate": False,
             "createdAt":   datetime.now().isoformat(),
         }
@@ -154,6 +157,10 @@ class EventsManager:
             return None
         rename_to = None
         for k, v in kwargs.items():
+            if k == "ingestUrl":
+                # Permitir limpiar con "" / None
+                e["ingestUrl"] = (str(v).strip() if v else "") or None
+                continue
             if v is None:
                 continue
             if k == "name":

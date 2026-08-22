@@ -33,6 +33,8 @@ export default function App() {
   const [takenPhotos,  setTakenPhotos]  = useState([])  // fotos b64 por slot
   const [printJob,     setPrintJob]     = useState(null) // null | { phase, printer, copies }
   const printTimerRef  = useRef(null)
+  const [ingestMsg,    setIngestMsg]    = useState(null) // { phase, file, msg }
+  const ingestTimerRef = useRef(null)
 
   // ── Handler WebSocket ────────────────────────────────────────────────────
   const handleMessage = useCallback((msg) => {
@@ -80,6 +82,12 @@ export default function App() {
 
       case 'camera_error':
         console.warn('[CAM]', msg.msg)
+        break
+
+      case 'ingest_status':
+        clearTimeout(ingestTimerRef.current)
+        setIngestMsg({ phase: msg.phase, file: msg.file, msg: msg.msg })
+        ingestTimerRef.current = setTimeout(() => setIngestMsg(null), msg.phase === 'uploading' ? 12000 : 4000)
         break
 
       case 'flash':
@@ -244,6 +252,33 @@ export default function App() {
               Conectando con el backend…
             </p>
             <p className="text-white/25 text-xs">ws://localhost:8765</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Estado upload ECA360 (no bloquea) ───────────────────────────── */}
+      <AnimatePresence>
+        {ingestMsg && (
+          <motion.div
+            key="ingest"
+            className="absolute bottom-4 right-4 z-40 rounded-xl px-4 py-2.5 text-xs font-semibold
+                       backdrop-blur-md border pointer-events-none"
+            style={{
+              background: ingestMsg.phase === 'err' ? 'rgba(127,29,29,0.85)'
+                : ingestMsg.phase === 'ok' ? 'rgba(6,78,59,0.85)'
+                : 'rgba(0,0,0,0.75)',
+              borderColor: ingestMsg.phase === 'err' ? 'rgba(248,113,113,0.4)'
+                : ingestMsg.phase === 'ok' ? 'rgba(52,211,153,0.4)'
+                : 'rgba(255,255,255,0.15)',
+              color: '#fff',
+            }}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+          >
+            {ingestMsg.phase === 'uploading' && `↑ Subiendo ${ingestMsg.file}…`}
+            {ingestMsg.phase === 'ok' && `✓ Enviada ${ingestMsg.file}`}
+            {ingestMsg.phase === 'err' && `⚠ No se subió ${ingestMsg.file}${ingestMsg.msg ? `: ${ingestMsg.msg}` : ''}`}
           </motion.div>
         )}
       </AnimatePresence>
