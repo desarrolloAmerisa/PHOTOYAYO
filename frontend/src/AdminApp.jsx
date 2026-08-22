@@ -162,9 +162,10 @@ function AdminAppInner() {
   useEffect(() => { fetchTemplates() }, [fetchTemplates])
 
   // ── Callbacks del editor ──────────────────────────────────────────────────
-  const handleSaved = (updatedEvent) => {
+  const handleSaved = (updatedEvent, previousId) => {
     setEvents(prev => {
-      const idx = prev.findIndex(e => e.id === updatedEvent.id)
+      const key = previousId || updatedEvent.id
+      const idx = prev.findIndex(e => e.id === key || e.id === updatedEvent.id)
       if (idx >= 0) {
         const next = [...prev]
         next[idx] = updatedEvent
@@ -173,6 +174,7 @@ function AdminAppInner() {
       return [...prev, updatedEvent]
     })
     setSelectedId(updatedEvent.id)
+    if (previousId && activeId === previousId) setActiveId(updatedEvent.id)
   }
 
   const handleDeleted = (id) => {

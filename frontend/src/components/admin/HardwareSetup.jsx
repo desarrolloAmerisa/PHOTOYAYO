@@ -399,7 +399,8 @@ export default function HardwareSetup({ onSaved }) {
               className="w-full accent-pink-500"
             />
             <p className={`text-xs ${t.textMuted}`}>
-              0 = más cerca · 255 = más lejos (el rango exacto depende de la cámara)
+              0 = no forzar (recomendado) · 1–255 = foco manual.
+              Ojo: foco en 0 forzado deja negra / cuelga muchas cámaras.
             </p>
           </div>
         )}

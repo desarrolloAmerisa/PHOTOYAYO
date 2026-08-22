@@ -82,9 +82,9 @@ _SETTINGS_DEFAULTS = {
     "printer_name":  None,
     "flip_horizontal": False,
     "flip_vertical": False,
-    # Enfoque: por defecto autofocus OFF (evita que la cámara “busque” sola)
-    "autofocus": False,
-    "focus": 0,          # 0–255 (manual; solo aplica si autofocus=False)
+    # Enfoque: AF ON por defecto (focus=0 rompe muchas webcams)
+    "autofocus": True,
+    "focus": 0,          # 0 = no forzar; >0 solo si AF off y el usuario lo elige
     "print_config":  _PRINT_CONFIG_DEFAULTS,
 }
 
@@ -117,18 +117,29 @@ def configure_capture(cap, settings: dict) -> None:
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     cap.set(cv2.CAP_PROP_FPS,          30)
 
-    autofocus = bool(settings.get("autofocus", False))
-    ok_af = cap.set(cv2.CAP_PROP_AUTOFOCUS, 1.0 if autofocus else 0.0)
+    # Warm-up: algunos drivers DirectShow no aplican props hasta el primer grab
+    cap.read()
+
+    autofocus = bool(settings.get("autofocus", True))
     if autofocus:
+        ok_af = cap.set(cv2.CAP_PROP_AUTOFOCUS, 1.0)
         print(f"[CAM] Autofocus ON  (driver aceptó={ok_af})")
         return
 
-    # Manual: desactivar AF y fijar foco
-    focus = max(0, min(255, int(settings.get("focus", 0) or 0)))
-    ok_f = cap.set(cv2.CAP_PROP_FOCUS, float(focus))
-    # Reafirmar AF off (algunos drivers lo reactivan al tocar FOCUS)
-    cap.set(cv2.CAP_PROP_AUTOFOCUS, 0.0)
-    print(f"[CAM] Autofocus OFF (aceptó={ok_af}), focus={focus} (aceptó={ok_f})")
+    # Manual: apagar AF. NO forzar focus=0 (en muchas cams deja imagen negra o cuelga el driver).
+    ok_af = cap.set(cv2.CAP_PROP_AUTOFOCUS, 0.0)
+    focus = int(settings.get("focus", -1) if settings.get("focus") is not None else -1)
+    # Solo aplicar foco manual si el usuario eligió un valor > 0
+    if focus > 0:
+        focus = max(1, min(255, focus))
+        ok_f = cap.set(cv2.CAP_PROP_FOCUS, float(focus))
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0.0)
+        print(f"[CAM] Autofocus OFF (aceptó={ok_af}), focus={focus} (aceptó={ok_f})")
+    else:
+        # Mantener el foco actual del driver; solo bloquear AF
+        cur = cap.get(cv2.CAP_PROP_FOCUS)
+        print(f"[CAM] Autofocus OFF (aceptó={ok_af}), focus driver={cur:.0f} (sin forzar 0)")
+
 
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
@@ -570,20 +581,49 @@ class PhotoboothBackend:
                                   "photoCount":  self.photo_count,
                                   "totalPhotos": self.session_burst})
 
+    def _open_capture(self, index: int):
+        """Abre la cámara; devuelve VideoCapture o None."""
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            try:
+                cap.release()
+            except Exception:
+                pass
+            cap = cv2.VideoCapture(index, cv2.CAP_MSMF)
+        if not cap.isOpened():
+            try:
+                cap.release()
+            except Exception:
+                pass
+            print(f"[CAM] ERROR: no se pudo abrir cámara índice {index}")
+            return None
+        configure_capture(cap, self.settings)
+        # Verificar que entrega frames
+        ok, _ = cap.read()
+        if not ok:
+            print(f"[CAM] ERROR: cámara {index} abierta pero no entrega frames")
+            try:
+                cap.release()
+            except Exception:
+                pass
+            return None
+        print(f"[CAM] Cámara {index} OK")
+        return cap
+
     # ── Reinicio de cámara ───────────────────────────────────────────────────
     async def _reinit_camera(self, index: int):
         """Cambia la cámara en caliente sin detener el backend."""
         loop = asyncio.get_running_loop()
-        settings = self.settings
         def _swap():
             if self.cap is not None:
-                self.cap.release()
-            cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-            configure_capture(cap, settings)
-            return cap
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+            return self._open_capture(index)
         self.cap = await loop.run_in_executor(self._executor, _swap)
-        print(f"[CAM] Cámara cambiada → índice {index}")
-        await self.broadcast({"type": "camera_changed", "index": index})
+        print(f"[CAM] Cámara cambiada → índice {index} (ok={self.cap is not None})")
+        await self.broadcast({"type": "camera_changed", "index": index, "ok": self.cap is not None})
 
     async def _apply_focus_settings(self):
         """Reaplica autofocus/focus sobre la cámara abierta."""
@@ -618,12 +658,42 @@ class PhotoboothBackend:
     async def capture_loop(self):
         loop           = asyncio.get_running_loop()
         frame_interval = 1.0 / 30
+        fail_streak    = 0
+        last_reopen_at = 0.0
         while self.running:
             t0 = time.monotonic()
+
+            if self.cap is None:
+                now = time.time()
+                if now - last_reopen_at > 3.0:
+                    last_reopen_at = now
+                    idx = self.settings.get("camera_index", 0)
+                    print(f"[CAM] Reintentando abrir cámara {idx}…")
+                    self.cap = await loop.run_in_executor(
+                        self._executor, lambda: self._open_capture(idx)
+                    )
+                    if self.cap is None and self.clients:
+                        await self.broadcast({
+                            "type": "camera_error",
+                            "msg": "No se pudo abrir la cámara. Cierra otras apps que la usen (Chrome, Zoom, Cámara de Windows) o reinicia el dispositivo.",
+                        })
+                await asyncio.sleep(0.5)
+                continue
+
             ret, raw = await loop.run_in_executor(self._executor, self.cap.read)
             if not ret:
+                fail_streak += 1
+                if fail_streak >= 30:
+                    print("[CAM] Demasiados fallos de lectura — liberando y reabriendo")
+                    try:
+                        self.cap.release()
+                    except Exception:
+                        pass
+                    self.cap = None
+                    fail_streak = 0
                 await asyncio.sleep(0.033)
                 continue
+            fail_streak = 0
             frame = raw
             # Aplicar flip según configuración
             if self.settings.get("flip_horizontal"):
@@ -645,8 +715,9 @@ class PhotoboothBackend:
         ensure_model()
 
         cam_idx  = self.settings.get("camera_index", 0)
-        self.cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
-        configure_capture(self.cap, self.settings)
+        self.cap = self._open_capture(cam_idx)
+        if self.cap is None:
+            print("[CAM] Arranque sin cámara — se reintentará en el loop")
 
         base_opts   = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         opts        = mp_vision.HandLandmarkerOptions(
@@ -680,7 +751,8 @@ class PhotoboothBackend:
             finally:
                 await admin_runner.cleanup()
 
-        self.cap.release()
+        if self.cap is not None:
+            self.cap.release()
         self.detector.close()
         self._executor.shutdown(wait=False)
         print("Backend cerrado.")

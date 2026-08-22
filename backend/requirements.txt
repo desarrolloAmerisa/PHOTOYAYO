@@ -1,7 +1,10 @@
-opencv-python>=4.8.0
+opencv-python==4.10.0.84
 mediapipe>=0.10.0
 Pillow>=10.0.0
 numpy>=1.24.0
 websockets>=12.0
 aiohttp>=3.9.0
 pywin32>=306  # impresión en Windows (win32print, win32ui, win32api)
+# Nota: no usar opencv 5.x — rompe DirectShow en varias webcams Windows
+opencv-contrib-python==4.10.0.84
+

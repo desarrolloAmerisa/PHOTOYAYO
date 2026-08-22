@@ -4,15 +4,17 @@ EventsManager — Gestión de eventos del photobooth.
 Estructura en disco:
   events.json           ← índice de todos los eventos
   events/
-    {id}/
+    {nombre-del-evento}/
       template.png      (opcional)
       sessions/         (fotos en plano: foto1_1.jpg, foto1_2.jpg, tira1.jpg, …)
+
+El id del evento = nombre de la carpeta (sanitizado). Ya no se usan UUIDs.
 """
 
 import io
 import json
+import re
 import shutil
-import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +23,17 @@ from PIL import Image
 EVENTS_ROOT = Path(__file__).parent.parent / "events"
 EVENTS_FILE = Path(__file__).parent.parent / "events.json"
 
+_INVALID_WIN = re.compile(r'[<>:"/\\|?*]')
+_HEX_ID = re.compile(r"^[0-9a-f]{8,}$", re.IGNORECASE)
+
+
+def slugify_event_name(name: str) -> str:
+    """Nombre usable como carpeta en Windows."""
+    s = (name or "").strip()
+    s = _INVALID_WIN.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip(" .")
+    return s or "evento"
+
 
 class EventsManager:
     def __init__(self):
@@ -28,6 +41,7 @@ class EventsManager:
         self.active_id: str | None = None
         EVENTS_ROOT.mkdir(exist_ok=True)
         self._load()
+        self._migrate_hex_ids_to_names()
 
     # ── Persistencia ──────────────────────────────────────────────────────────
 
@@ -49,6 +63,62 @@ class EventsManager:
             encoding="utf-8",
         )
 
+    def _unique_id(self, base: str, exclude: str | None = None) -> str:
+        """Evita choques de nombre entre eventos / carpetas."""
+        candidate = base
+        n = 2
+        while True:
+            id_taken = candidate in self.events and candidate != exclude
+            folder_taken = (EVENTS_ROOT / candidate).exists() and candidate != exclude
+            if not id_taken and not folder_taken:
+                return candidate
+            candidate = f"{base} ({n})"
+            n += 1
+            if n > 500:
+                return f"{base} ({uuid_fallback()})"
+
+    def _event_dir(self, eid: str) -> Path:
+        return EVENTS_ROOT / eid
+
+    def _rename_event_id(self, old_id: str, new_id: str) -> dict | None:
+        e = self.events.get(old_id)
+        if not e or old_id == new_id:
+            return e
+        old_path = self._event_dir(old_id)
+        new_path = self._event_dir(new_id)
+        if new_path.exists() and new_path.resolve() != old_path.resolve():
+            # no pisar otra carpeta
+            new_id = self._unique_id(new_id, exclude=old_id)
+            new_path = self._event_dir(new_id)
+        if old_path.exists():
+            old_path.rename(new_path)
+        else:
+            (new_path / "sessions").mkdir(parents=True, exist_ok=True)
+        e["id"] = new_id
+        del self.events[old_id]
+        self.events[new_id] = e
+        if self.active_id == old_id:
+            self.active_id = new_id
+        return e
+
+    def _migrate_hex_ids_to_names(self):
+        """Renombra carpetas UUID → nombre del evento (una sola vez al cargar)."""
+        changed = False
+        for eid in list(self.events.keys()):
+            e = self.events.get(eid)
+            if not e:
+                continue
+            if not _HEX_ID.match(eid):
+                continue
+            desired = self._unique_id(slugify_event_name(e.get("name", "")), exclude=eid)
+            if desired == eid:
+                continue
+            print(f"[EVENTS] Migrando carpeta '{eid}' → '{desired}'")
+            self._rename_event_id(eid, desired)
+            changed = True
+        if changed:
+            self._save()
+
     # ── CRUD ──────────────────────────────────────────────────────────────────
 
     def list_events(self) -> list:
@@ -60,7 +130,8 @@ class EventsManager:
     def create_event(self, name: str, width: int, height: int,
                       photo_count: int = 3, timer_secs: int = 3,
                       template_id: str | None = None) -> dict:
-        eid = uuid.uuid4().hex[:8]
+        clean = slugify_event_name(name)
+        eid = self._unique_id(clean)
         event = {
             "id":          eid,
             "name":        name.strip(),
@@ -73,7 +144,7 @@ class EventsManager:
             "createdAt":   datetime.now().isoformat(),
         }
         self.events[eid] = event
-        (EVENTS_ROOT / eid / "sessions").mkdir(parents=True, exist_ok=True)
+        (self._event_dir(eid) / "sessions").mkdir(parents=True, exist_ok=True)
         self._save()
         return event
 
@@ -81,11 +152,13 @@ class EventsManager:
         e = self.events.get(eid)
         if not e:
             return None
+        rename_to = None
         for k, v in kwargs.items():
             if v is None:
                 continue
             if k == "name":
                 e["name"] = str(v).strip()
+                rename_to = slugify_event_name(e["name"])
             elif k in ("width", "height"):
                 e[k] = int(v)
             elif k == "photoCount":
@@ -94,13 +167,18 @@ class EventsManager:
                 e["timerSecs"] = max(1, min(int(v), 30))
             elif k == "templateId":
                 e["templateId"] = v if v else None
+
+        if rename_to and rename_to != eid:
+            new_id = self._unique_id(rename_to, exclude=eid)
+            e = self._rename_event_id(eid, new_id) or e
+
         self._save()
         return e
 
     def delete_event(self, eid: str) -> bool:
         if eid not in self.events:
             return False
-        shutil.rmtree(EVENTS_ROOT / eid, ignore_errors=True)
+        shutil.rmtree(self._event_dir(eid), ignore_errors=True)
         del self.events[eid]
         if self.active_id == eid:
             self.active_id = None
@@ -144,7 +222,8 @@ class EventsManager:
                 f"La plantilla debe ser {e['width']}×{e['height']} px, "
                 f"se recibió {w}×{h} px"
             )
-        tpl_path = EVENTS_ROOT / eid / "template.png"
+        tpl_path = self._event_dir(eid) / "template.png"
+        tpl_path.parent.mkdir(parents=True, exist_ok=True)
         tpl_path.write_bytes(png_bytes)
         e["hasTemplate"] = True
         self._save()
@@ -154,19 +233,19 @@ class EventsManager:
         e = self.events.get(eid)
         if not e:
             return False
-        (EVENTS_ROOT / eid / "template.png").unlink(missing_ok=True)
+        (self._event_dir(eid) / "template.png").unlink(missing_ok=True)
         e["hasTemplate"] = False
         self._save()
         return True
 
     def get_template_path(self, eid: str) -> Path | None:
-        p = EVENTS_ROOT / eid / "template.png"
+        p = self._event_dir(eid) / "template.png"
         return p if p.exists() else None
 
     # ── Directorio de sesiones ────────────────────────────────────────────────
 
     def get_sessions_dir(self, eid: str) -> Path:
-        d = EVENTS_ROOT / eid / "sessions"
+        d = self._event_dir(eid) / "sessions"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -207,10 +286,15 @@ class EventsManager:
         photo = cv2.resize(frame_bgr, (w, h))
 
         tpl_path = self.get_template_path(eid)
-        if tpl_path is None:
-            return photo
+        if tpl_path and tpl_path.exists():
+            tpl = Image.open(tpl_path).convert("RGBA")
+            base = Image.fromarray(cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)).convert("RGBA")
+            composed = Image.alpha_composite(base, tpl)
+            photo = cv2.cvtColor(np.array(composed.convert("RGB")), cv2.COLOR_RGB2BGR)
 
-        tpl       = Image.open(tpl_path).convert("RGBA")
-        photo_pil = Image.fromarray(cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)).convert("RGBA")
-        photo_pil.paste(tpl, (0, 0), mask=tpl)
-        return cv2.cvtColor(np.array(photo_pil.convert("RGB")), cv2.COLOR_RGB2BGR)
+        return photo
+
+
+def uuid_fallback() -> str:
+    import uuid
+    return uuid.uuid4().hex[:6]

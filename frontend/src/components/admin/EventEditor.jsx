@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useTheme } from '../../ThemeContext'
 
 const API = 'http://localhost:8766'
+const eventUrl = (id, suffix = '') =>
+  `${API}/api/events/${encodeURIComponent(id)}${suffix}`
 
 // ── Sub-componentes ──────────────────────────────────────────────────────────
 
@@ -122,10 +124,10 @@ function TemplateSection({ event, onSaved }) {
     try {
       const fd = new FormData()
       fd.append('file', pending)
-      const r    = await fetch(`${API}/api/events/${event.id}/template`, { method: 'POST', body: fd })
+      const r    = await fetch(eventUrl(event.id, '/template'), { method: 'POST', body: fd })
       const data = await r.json()
       if (!r.ok) throw new Error(data.error)
-      onSaved(data)
+      onSaved(data, event.id)
       setPending(null)
       // preview stays to show uploaded image
     } catch (e) {
@@ -138,8 +140,8 @@ function TemplateSection({ event, onSaved }) {
   const handleRemove = async () => {
     setRemoving(true)
     try {
-      await fetch(`${API}/api/events/${event.id}/template`, { method: 'DELETE' })
-      onSaved({ ...event, hasTemplate: false })
+      await fetch(eventUrl(event.id, '/template'), { method: 'DELETE' })
+      onSaved({ ...event, hasTemplate: false }, event.id)
       setPending(null)
       if (preview) { URL.revokeObjectURL(preview); setPreview(null) }
     } finally {
@@ -150,7 +152,7 @@ function TemplateSection({ event, onSaved }) {
   const tplSrc = preview
     ? preview
     : event.hasTemplate
-      ? `${API}/api/events/${event.id}/template?t=${Date.now()}`
+      ? `${eventUrl(event.id, '/template')}?t=${Date.now()}`
       : null
 
   const hasTpl = event.hasTemplate || pending
@@ -283,7 +285,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
   const handleSave = async () => {
     setError(null); setSaving(true)
     try {
-      const url    = event ? `${API}/api/events/${event.id}` : `${API}/api/events`
+      const url    = event ? eventUrl(event.id) : `${API}/api/events`
       const method = event ? 'PUT' : 'POST'
       const r      = await fetch(url, {
         method,
@@ -299,7 +301,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
       })
       const data = await r.json()
       if (!r.ok) throw new Error(data.error || 'Error al guardar')
-      onSaved(data)
+      onSaved(data, event?.id)
       setSuccess(event ? 'Guardado ✓' : null)
       if (success) setTimeout(() => setSuccess(null), 2500)
     } catch (e) { setError(e.message) }
@@ -311,7 +313,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
     setActivating(true)
     try {
       const method = isActive ? 'DELETE' : 'POST'
-      await fetch(`${API}/api/events/${event.id}/activate`, { method })
+      await fetch(eventUrl(event.id, '/activate'), { method })
       onActivated(isActive ? null : event.id)
     } finally { setActivating(false) }
   }
@@ -321,7 +323,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
     if (!window.confirm(`¿Eliminar el evento "${event.name}"?\nSe borrarán todas sus fotos y plantilla.`)) return
     setDeleting(true)
     try {
-      const r    = await fetch(`${API}/api/events/${event.id}`, { method: 'DELETE' })
+      const r    = await fetch(eventUrl(event.id), { method: 'DELETE' })
       const data = await r.json()
       if (!r.ok) throw new Error(data.error)
       onDeleted(event.id)
@@ -415,10 +417,8 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
             )}
 
             <div className={`p-3 rounded-xl ${t.bgSection} border ${t.borderFaint} ${t.textFaint} text-xs`}>
-              Las fotos se guardan en plano:{" "}
-              <span className={`${t.textMuted} font-mono`}>events/{'{id}'}/sessions/foto1_1.jpg</span>,{" "}
-              <span className={`${t.textMuted} font-mono`}>foto1_2.jpg</span>,{" "}
-              <span className={`${t.textMuted} font-mono`}>tira1.jpg</span>…
+              Las fotos van en:{" "}
+              <span className={`${t.textMuted} font-mono`}>events/Nombre del evento/sessions/foto1_1.jpg</span>…
             </div>
 
             {error && <p className="text-red-400 text-sm">⚠️ {error}</p>}

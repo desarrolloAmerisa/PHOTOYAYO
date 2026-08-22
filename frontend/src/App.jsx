@@ -78,6 +78,10 @@ export default function App() {
         if (msg.photoNum !== undefined) setPhotoNum(msg.photoNum)
         break
 
+      case 'camera_error':
+        console.warn('[CAM]', msg.msg)
+        break
+
       case 'flash':
         setFlash(true)
         setPhotoCount(msg.photoNum)
