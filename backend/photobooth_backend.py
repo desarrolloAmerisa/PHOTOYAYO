@@ -258,6 +258,20 @@ _RE_FOTO = re.compile(r"^foto(\d+)_\d+\.jpg$", re.IGNORECASE)
 _RE_TIRA = re.compile(r"^tira(\d+)\.jpg$", re.IGNORECASE)
 
 
+def save_image(path: str, image, jpeg_quality: int = 95) -> None:
+    """
+    Guarda JPEG de forma segura en Windows.
+    cv2.imwrite falla en silencio con rutas Unicode (Ñ, acentos, etc.);
+    imencode + write_bytes sí funciona.
+    """
+    from pathlib import Path
+    ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+    if not ok:
+        raise RuntimeError(f"cv2.imencode falló para {path}")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_bytes(buf.tobytes())
+
+
 def next_session_number(base_dir: str) -> int:
     """Siguiente índice de sesión en una carpeta plana (fotoN_K / tiraN)."""
     n = 0
@@ -574,18 +588,24 @@ class PhotoboothBackend:
             if active and not has_interactive_tpl:
                 photo = evmgr.apply_to_photo(photo, active["id"])
             path = os.path.join(session_dir, f"foto{session_num}_{photo_num}.jpg")
-            cv2.imwrite(path, photo)
+            save_image(path, photo, jpeg_quality=95)
             th = 240
             tw = int(photo.shape[1] * th / photo.shape[0])
             _, tbuf = cv2.imencode(".jpg", cv2.resize(photo, (tw, th)),
                                    [cv2.IMWRITE_JPEG_QUALITY, 82])
             return photo, base64.b64encode(tbuf).decode(), path
 
-        photo, photo_b64, photo_path = await loop.run_in_executor(self._executor, _process_and_save)
+        try:
+            photo, photo_b64, photo_path = await loop.run_in_executor(
+                self._executor, _process_and_save
+            )
+        except Exception as exc:
+            print(f"  [SAVE] ERROR foto{session_num}_{photo_num}.jpg: {exc}")
+            raise
         self.photo_count += 1
         self.photos_taken.append(photo)
         self.flash_until = time.time() + FLASH_SECS
-        print(f"  \U0001f4f7  foto{session_num}_{self.photo_count}.jpg")
+        print(f"  \U0001f4f7  foto{session_num}_{self.photo_count}.jpg → {photo_path}")
         await self.broadcast({"type": "flash", "photoNum": self.photo_count, "photo": photo_b64})
 
         # ECA360: subir foto en background (no bloquea el booth)
@@ -613,12 +633,12 @@ class PhotoboothBackend:
                 else:
                     strip = make_strip(photos_snap)
                 strip_path = os.path.join(_sdir, f"tira{_snum}.jpg")
-                cv2.imwrite(strip_path, strip)
+                save_image(strip_path, strip, jpeg_quality=88)
                 _, buf = cv2.imencode(".jpg", strip, [cv2.IMWRITE_JPEG_QUALITY, 88])
                 return base64.b64encode(buf).decode(), strip_path
 
             strip_b64, strip_path = await loop.run_in_executor(self._executor, _build_strip)
-            print(f"  \U0001f39e\ufe0f  tira{_snum}.jpg")
+            print(f"  \U0001f39e\ufe0f  tira{_snum}.jpg → {strip_path}")
             if _ingest:
                 asyncio.create_task(upload_to_eca360(_ingest, strip_path, self.broadcast))
             self.state         = "preview"
