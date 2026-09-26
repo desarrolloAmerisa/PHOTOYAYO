@@ -644,8 +644,8 @@ class PhotoboothBackend:
             self.state         = "preview"
             self.preview_start = time.time()
             self.palm_cooldown = time.time() + 2.0
-            await self.broadcast({"type": "strip", "data": strip_b64})
-            await self.broadcast({"type": "state", "state": "preview"})
+            await self.broadcast({"type": "strip", "data": strip_b64, "session": _snum})
+            await self.broadcast({"type": "state", "state": "preview", "session": _snum})
         else:
             # Usar session_countdown (configurado del evento) para el intervalo entre fotos
             self.next_shot_at    = time.time() + self.session_countdown

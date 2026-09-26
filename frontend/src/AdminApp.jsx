@@ -6,6 +6,7 @@ import HardwareSetup from './components/admin/HardwareSetup'
 import PrintConfig  from './components/admin/PrintConfig'
 import TemplateList from './components/admin/TemplateList'
 import TemplateEditor from './components/admin/TemplateEditor'
+import LiveMonitor  from './components/admin/LiveMonitor'
 import { ThemeProvider, useTheme } from './ThemeContext'
 import DebugPanel  from './components/DebugPanel'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -45,7 +46,7 @@ function AdminAppInner() {
   const [selectedId, setSelectedId] = useState(null)  // null = modo "nuevo"
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState(null)
-  const [activeTab,  setActiveTab]  = useState('events')  // 'events' | 'hardware' | 'print' | 'templates'
+  const [activeTab,  setActiveTab]  = useState('live')  // 'live' | 'events' | 'hardware' | 'print' | 'templates'
 
   // ── Estado de hardware (para el checklist) ────────────────────────────────
   const [hwConfig, setHwConfig] = useState({ camera: null, printer: null, loaded: false })
@@ -93,40 +94,91 @@ function AdminAppInner() {
   // ── Estado de impresión (broadcast WS) ──────────────────────────────
   const [printJob,   setPrintJob]   = useState(null)   // null | { phase, printer, copies, msg }
   const printTimerRef = useRef(null)
+  const camRef = useRef(null)
+
+  // ── Monitor en vivo ─────────────────────────────────────────────────
+  const [liveCountdown,   setLiveCountdown]   = useState(0)
+  const [livePhotoCount,  setLivePhotoCount]  = useState(0)
+  const [liveTotalPhotos, setLiveTotalPhotos] = useState(3)
+  const [livePhotos,      setLivePhotos]      = useState([])
+  const [liveStrip,       setLiveStrip]       = useState(null)
+  const [liveSession,     setLiveSession]     = useState(null)
+  const [liveEvent,       setLiveEvent]       = useState(null)
 
   const sendWs = useWebSocket(WS_URL, useCallback((msg) => {
     if (msg.type === 'frame') {
+      if (camRef.current && msg.data)
+        camRef.current.src = `data:image/jpeg;base64,${msg.data}`
       if (msg.gesture)  setDbGesture(msg.gesture)
       if (msg.debugMode !== undefined) setShowDebug(msg.debugMode)
     }
-    if (msg.type === 'state')  setDbState(msg.state)
+    if (msg.type === 'state') {
+      setDbState(msg.state)
+      if (msg.totalPhotos !== undefined) setLiveTotalPhotos(msg.totalPhotos)
+      if (msg.photoCount  !== undefined) setLivePhotoCount(msg.photoCount)
+      if (msg.session     !== undefined) setLiveSession(msg.session)
+      if (msg.state === 'idle')      { setLiveStrip(null); setLivePhotoCount(0); setLivePhotos([]) }
+      if (msg.state === 'countdown') { setLivePhotos([]); setLiveStrip(null) }
+    }
+    if (msg.type === 'countdown') {
+      if (msg.value !== undefined) setLiveCountdown(msg.value)
+    }
+    if (msg.type === 'flash') {
+      setLivePhotoCount(msg.photoNum)
+      if (msg.photo) setLivePhotos(prev => [...prev, msg.photo])
+    }
+    if (msg.type === 'strip') {
+      setLiveStrip(msg.data)
+      if (msg.session !== undefined) setLiveSession(msg.session)
+    }
     if (msg.type === 'init') {
       setDbState(msg.state || 'idle')
       setShowDebug(msg.debug || false)
+      setLiveEvent(msg.activeEvent || null)
+      if (msg.activeId !== undefined) setActiveId(msg.activeId || null)
+      setLiveTotalPhotos(msg.activeEvent?.photoCount ?? 3)
+    }
+    if (msg.type === 'active_event') {
+      setLiveEvent(msg.activeEvent || null)
+      setActiveId(msg.activeId || null)
+      setLiveTotalPhotos(msg.activeEvent?.photoCount ?? 3)
     }
     if (msg.type === 'print_start') {
       clearTimeout(printTimerRef.current)
-      setPrintJob({ phase: 'printing', printer: msg.printer, copies: msg.copies })
-      // Seguridad: si print_done nunca llega (impresión cancelada), cerrar a los 15 s
+      setPrintJob({
+        phase: 'printing',
+        printer: msg.printer,
+        copies: msg.copies,
+        session: msg.session,
+      })
       printTimerRef.current = setTimeout(() => {
         setPrintJob(prev => prev?.phase === 'printing'
           ? { ...prev, phase: 'err', msg: 'Sin respuesta de la impresora (timeout)' }
           : prev
         )
-        // Dejar el error visible; no limpiar automáticamente
-      }, 15000)
+      }, 20000)
     }
     if (msg.type === 'print_done') {
       clearTimeout(printTimerRef.current)
-      setPrintJob(prev => prev ? { ...prev, phase: msg.ok ? 'ok' : 'err', msg: msg.msg } : null)
-      // Éxito: desaparece a los 6 s. Error: queda visible para que el encargado lo cierre
-      if (msg.ok) {
-        printTimerRef.current = setTimeout(() => setPrintJob(null), 6000)
+      const phase = msg.cancelled ? 'cancelled' : (msg.ok ? 'ok' : 'err')
+      setPrintJob(prev => prev ? { ...prev, phase, msg: msg.msg } : {
+        phase, printer: msg.printer, copies: msg.copies, msg: msg.msg, session: msg.session,
+      })
+      if (phase !== 'err') {
+        printTimerRef.current = setTimeout(() => setPrintJob(null), 5000)
       }
     }
   }, []))
 
   const toggleDebug = () => sendWs({ type: 'toggle_debug' })
+  const startSession = () => {
+    if (dbState === 'idle' || dbState === 'mirror') sendWs({ type: 'start_session' })
+  }
+  const cancelPrint = async () => {
+    try {
+      await fetch(`${API}/api/print/cancel`, { method: 'POST' })
+    } catch { /* el toast se actualiza por WS */ }
+  }
 
   // Espacio también inicia sesión desde el panel admin (sin ir a la ventana de cámara)
   useEffect(() => {
@@ -310,7 +362,7 @@ function AdminAppInner() {
                 <div className={`mx-4 mt-3 px-4 py-3 rounded-xl border
                                  bg-blue-500/10 border-blue-500/30 flex items-center gap-3`}>
                   <span className="text-blue-400 font-semibold text-sm">💡 Fallback:</span>
-                  <span className="text-blue-300/80 text-sm">Presiona la <span className="font-mono font-bold">BARRA ESPACIADORA</span> para iniciar la captura si falla el reconocimiento de manos</span>
+                  <span className="text-blue-300/80 text-sm">Usa <span className="font-semibold">Iniciar sesión</span> en En vivo, o la <span className="font-mono font-bold">BARRA ESPACIADORA</span></span>
                 </div>
               </motion.div>
             )}
@@ -319,6 +371,7 @@ function AdminAppInner() {
           {/* ── Tabs ── */}
           <div className={`flex items-center gap-1 px-4 pt-3 pb-0 flex-shrink-0 border-b ${t.border}`}>
             {[
+              { id: 'live',      label: '📡 En vivo'    },
               { id: 'events',    label: '📋 Eventos'    },
               { id: 'hardware',  label: '⚙️ Hardware'   },
               { id: 'print',     label: '🖨️ Impresión' },
@@ -339,7 +392,32 @@ function AdminAppInner() {
 
           <div className="flex flex-1 overflow-hidden">
             <AnimatePresence mode="wait">
-              {activeTab === 'events' ? (
+              {activeTab === 'live' ? (
+                <motion.div
+                  key="live-tab"
+                  className="flex flex-1 overflow-hidden"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                >
+                  <LiveMonitor
+                    camRef={camRef}
+                    appState={dbState}
+                    countdown={liveCountdown}
+                    photoCount={livePhotoCount}
+                    totalPhotos={liveTotalPhotos}
+                    takenPhotos={livePhotos}
+                    strip={liveStrip}
+                    lastSession={liveSession}
+                    activeEvent={liveEvent || events.find(e => e.id === activeId) || null}
+                    activeId={activeId}
+                    printJob={printJob}
+                    onStartSession={startSession}
+                    onCancelPrint={cancelPrint}
+                  />
+                </motion.div>
+              ) : activeTab === 'events' ? (
                 <motion.div
                   key="events-tab"
                   className="flex flex-1 overflow-hidden"
@@ -465,9 +543,10 @@ function AdminAppInner() {
           >
             <div className={`rounded-2xl border shadow-2xl p-4 flex items-start gap-3
               ${
-                printJob.phase === 'printing' ? `bg-[#18181b] border-pink-500/40` :
-                printJob.phase === 'ok'       ? `bg-[#18181b] border-emerald-500/40` :
-                                                `bg-[#18181b] border-red-500/40`
+                printJob.phase === 'printing'  ? `bg-[#18181b] border-pink-500/40` :
+                printJob.phase === 'ok'        ? `bg-[#18181b] border-emerald-500/40` :
+                printJob.phase === 'cancelled' ? `bg-[#18181b] border-amber-500/40` :
+                                                 `bg-[#18181b] border-red-500/40`
               }`}>
               {/* Icono / spinner */}
               <div className="mt-0.5 flex-shrink-0">
@@ -479,6 +558,8 @@ function AdminAppInner() {
                   />
                 ) : printJob.phase === 'ok' ? (
                   <span className="text-emerald-400 text-lg">✓</span>
+                ) : printJob.phase === 'cancelled' ? (
+                  <span className="text-amber-300 text-lg">✋</span>
                 ) : (
                   <span className="text-red-400 text-lg">✗</span>
                 )}
@@ -486,11 +567,13 @@ function AdminAppInner() {
               {/* Texto */}
               <div className="flex-1 min-w-0">
                 <p className={`text-sm font-bold ${
-                  printJob.phase === 'printing' ? 'text-pink-300' :
-                  printJob.phase === 'ok'       ? 'text-emerald-300' : 'text-red-400'
+                  printJob.phase === 'printing'  ? 'text-pink-300' :
+                  printJob.phase === 'ok'        ? 'text-emerald-300' :
+                  printJob.phase === 'cancelled' ? 'text-amber-300' : 'text-red-400'
                 }`}>
-                  {printJob.phase === 'printing' ? '🖨️ Enviando a impresora…' :
-                   printJob.phase === 'ok'       ? '🖨️ Trabajo enviado' : '🖨️ Error de impresión'}
+                  {printJob.phase === 'printing'  ? `🖨️ Imprimiendo${printJob.session ? ` tira ${printJob.session}` : ''}…` :
+                   printJob.phase === 'ok'        ? '🖨️ Trabajo enviado' :
+                   printJob.phase === 'cancelled' ? '🖨️ Impresión cancelada' : '🖨️ Error de impresión'}
                 </p>
                 <p className="text-xs text-white/40 mt-0.5 truncate">{printJob.printer}</p>
                 <div className="flex items-center gap-3 mt-1.5">
@@ -499,10 +582,20 @@ function AdminAppInner() {
                   </span>
                   {printJob.msg && printJob.phase !== 'printing' && (
                     <span className={`text-xs font-medium ${
-                      printJob.phase === 'ok' ? 'text-emerald-400/70' : 'text-red-400/70'
+                      printJob.phase === 'ok' ? 'text-emerald-400/70' :
+                      printJob.phase === 'cancelled' ? 'text-amber-400/70' : 'text-red-400/70'
                     }`}>{printJob.msg}</span>
                   )}
                 </div>
+                {printJob.phase === 'printing' && (
+                  <button
+                    onClick={cancelPrint}
+                    className="mt-2 w-full py-1.5 rounded-lg bg-red-600/90 hover:bg-red-500
+                               text-white text-xs font-bold"
+                  >
+                    Cancelar y vaciar cola
+                  </button>
+                )}
               </div>
               {/* Cerrar */}
               <button

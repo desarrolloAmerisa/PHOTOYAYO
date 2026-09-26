@@ -111,7 +111,15 @@ export default function App() {
 
       case 'print_done':
         clearTimeout(printTimerRef.current)
-        setPrintJob(prev => prev ? { ...prev, phase: msg.ok ? 'ok' : 'err', msg: msg.msg } : null)
+        if (msg.cancelled) {
+          setPrintJob(null)
+          break
+        }
+        setPrintJob(prev => prev ? {
+          ...prev,
+          phase: msg.ok ? 'ok' : 'err',
+          msg: msg.msg,
+        } : null)
         printTimerRef.current = setTimeout(() => setPrintJob(null), 4000)
         break
 

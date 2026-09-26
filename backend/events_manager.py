@@ -256,6 +256,49 @@ class EventsManager:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def list_strips(self, eid: str) -> list[dict]:
+        """Tiras guardadas del evento, más reciente primero."""
+        if eid not in self.events:
+            return []
+        d = self.get_sessions_dir(eid)
+        items = []
+        for p in d.glob("tira*.jpg"):
+            m = re.match(r"^tira(\d+)\.jpg$", p.name, re.IGNORECASE)
+            if not m:
+                continue
+            n = int(m.group(1))
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            photos = list(d.glob(f"foto{n}_*.jpg"))
+            items.append({
+                "session": n,
+                "name":    p.name,
+                "mtime":   st.st_mtime,
+                "photos":  len(photos),
+            })
+        items.sort(key=lambda x: x["session"], reverse=True)
+        return items
+
+    def get_strip_path(self, eid: str, session: int) -> Path | None:
+        """Ruta segura a tiraN.jpg dentro de sessions/."""
+        if eid not in self.events:
+            return None
+        try:
+            session = int(session)
+        except (TypeError, ValueError):
+            return None
+        if session < 1 or session > 99999:
+            return None
+        root = self.get_sessions_dir(eid).resolve()
+        p = (root / f"tira{session}.jpg").resolve()
+        try:
+            p.relative_to(root)
+        except ValueError:
+            return None
+        return p if p.is_file() else None
+
     # ── Aplicar plantilla a una foto ──────────────────────────────────────────
 
     def apply_to_photo(self, frame_bgr, eid: str):

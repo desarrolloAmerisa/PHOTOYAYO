@@ -20,9 +20,13 @@ Endpoints:
   GET    /api/printers
   POST   /api/printers/select
   POST   /api/print
+  POST   /api/print/cancel
+  GET    /api/print/queue
   POST   /api/print-preview
   GET    /api/print-config
   POST   /api/print-config
+  GET    /api/events/{id}/strips
+  GET    /api/events/{id}/strips/{n}
   GET    /api/templates
   POST   /api/templates
   PUT    /api/templates/{id}
@@ -32,13 +36,16 @@ Endpoints:
   DELETE /api/templates/{id}/background
 """
 
+import io
 import json
 import os
 import sys
+import uuid
 import base64
 import tempfile
 import subprocess
 import asyncio
+import threading
 from aiohttp import web
 
 ADMIN_PORT = 8766
@@ -190,9 +197,165 @@ def _detect_printers() -> list[dict]:
     return printers
 
 
+# ── Job de impresión actual (para cancelar) ───────────────────────────────────
+_print_lock = threading.Lock()
+_print_job: dict = {
+    "id": None,
+    "cancel": False,
+    "printer": None,
+    "doc_tag": None,
+    "spooler_jobs": [],
+    "session": None,
+}
+
+
+def _job_document(job: dict) -> str:
+    return str(job.get("pDocument") or job.get("Document") or "")
+
+
+def _find_spooler_job(printer: str, doc_name: str) -> int | None:
+    if sys.platform != "win32" or not printer or not doc_name:
+        return None
+    try:
+        import win32print
+        handle = win32print.OpenPrinter(printer)
+        try:
+            for job in win32print.EnumJobs(handle, 0, 999, 1) or []:
+                if _job_document(job) == doc_name:
+                    return job.get("JobId")
+        finally:
+            win32print.ClosePrinter(handle)
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_printer(printer: str | None) -> str | None:
+    if printer:
+        return printer
+    if sys.platform != "win32":
+        return None
+    try:
+        import win32print
+        return win32print.GetDefaultPrinter()
+    except Exception:
+        return None
+
+
+def _open_printer(printer: str, admin: bool = False):
+    import win32print
+    if admin:
+        try:
+            return win32print.OpenPrinter(
+                printer, {"DesiredAccess": win32print.PRINTER_ALL_ACCESS}
+            )
+        except Exception:
+            pass
+    return win32print.OpenPrinter(printer)
+
+
+def _list_spooler_jobs(printer: str | None) -> list[dict]:
+    printer = _resolve_printer(printer)
+    if sys.platform != "win32" or not printer:
+        return []
+    try:
+        import win32print
+        handle = _open_printer(printer)
+        try:
+            jobs = []
+            for job in win32print.EnumJobs(handle, 0, 999, 1) or []:
+                jobs.append({
+                    "id":       job.get("JobId"),
+                    "document": _job_document(job),
+                    "status":   job.get("Status", 0),
+                    "pages":    job.get("TotalPages") or job.get("PagesPrinted") or 0,
+                })
+            return jobs
+        finally:
+            win32print.ClosePrinter(handle)
+    except Exception:
+        return []
+
+
+def _delete_spooler_jobs(printer: str, jobs: list[dict]) -> int:
+    import win32print
+    handle = _open_printer(printer, admin=True)
+    cancelled = 0
+    try:
+        for job in jobs:
+            jid = job.get("id") or job.get("JobId")
+            if jid is None:
+                continue
+            for control in (
+                getattr(win32print, "JOB_CONTROL_DELETE", 5),
+                getattr(win32print, "JOB_CONTROL_CANCEL", 3),
+            ):
+                try:
+                    win32print.SetJob(handle, jid, 0, None, control)
+                    cancelled += 1
+                    break
+                except Exception:
+                    continue
+    finally:
+        win32print.ClosePrinter(handle)
+    return cancelled
+
+
+def _cancel_spooler_jobs(
+    printer: str | None,
+    job_ids: list | None = None,
+    doc_tag: str | None = None,
+    purge_all: bool = False,
+) -> int:
+    """Borra trabajos del spooler. Si purge_all, vacía toda la cola."""
+    printer = _resolve_printer(printer)
+    if sys.platform != "win32" or not printer:
+        return 0
+    jobs = _list_spooler_jobs(printer)
+    if not jobs:
+        return 0
+    if purge_all:
+        return _purge_printer_queue(printer)
+    ids = set(job_ids or [])
+    selected = [
+        j for j in jobs
+        if j.get("id") in ids or (doc_tag and doc_tag in str(j.get("document") or ""))
+    ]
+    return _delete_spooler_jobs(printer, selected)
+
+
+def _purge_printer_queue(printer: str | None) -> int:
+    """Vacía toda la cola de la impresora (Windows)."""
+    printer = _resolve_printer(printer)
+    if sys.platform != "win32" or not printer:
+        return 0
+    jobs = _list_spooler_jobs(printer)
+    count = len(jobs)
+    try:
+        import win32print
+        handle = _open_printer(printer, admin=True)
+        try:
+            win32print.SetPrinter(handle, 0, None, win32print.PRINTER_CONTROL_PURGE)
+            leftover = _list_spooler_jobs(printer)
+            if leftover:
+                count = max(count, _delete_spooler_jobs(printer, leftover) + (count - len(leftover)))
+            return count
+        finally:
+            win32print.ClosePrinter(handle)
+    except Exception:
+        if jobs:
+            return _delete_spooler_jobs(printer, jobs)
+        return 0
+
+
 # ── Enviar imagen a impresora ─────────────────────────────────────────────────
-def _print_image(image_path: str, printer_name: str | None) -> tuple[bool, str]:
-    """Imprime un archivo de imagen en la impresora especificada."""
+def _print_image(
+    image_path: str,
+    printer_name: str | None,
+    doc_name: str | None = None,
+) -> tuple[bool, str, int | None]:
+    """Imprime un archivo de imagen. Devuelve (ok, msg, spooler_job_id)."""
+    title = doc_name or os.path.basename(image_path)
     if sys.platform == "win32":
         # Intentar con win32print + PIL
         try:
@@ -205,7 +368,7 @@ def _print_image(image_path: str, printer_name: str | None) -> tuple[bool, str]:
 
             hdc   = win32ui.CreateDC()
             hdc.CreatePrinterDC(printer)
-            hdc.StartDoc(os.path.basename(image_path))
+            hdc.StartDoc(title)
             hdc.StartPage()
 
             pw = hdc.GetDeviceCaps(110)   # HORZRES
@@ -222,14 +385,14 @@ def _print_image(image_path: str, printer_name: str | None) -> tuple[bool, str]:
             hdc.EndPage()
             hdc.EndDoc()
             hdc.DeleteDC()
-            return True, "OK"
+            return True, "OK", _find_spooler_job(printer, title)
         except ImportError:
             pass
         # Fallback: ShellExecute print verb
         try:
             import win32api
             win32api.ShellExecute(0, "print", image_path, f'"{printer_name}"' if printer_name else None, ".", 0)
-            return True, "OK (ShellExecute)"
+            return True, "OK (ShellExecute)", None
         except ImportError:
             pass
         # Último fallback: mspaint silencioso
@@ -238,22 +401,24 @@ def _print_image(image_path: str, printer_name: str | None) -> tuple[bool, str]:
             if printer_name:
                 cmd.append(printer_name)
             subprocess.Popen(cmd)
-            return True, "OK (mspaint)"
+            return True, "OK (mspaint)", None
         except Exception as exc:
-            return False, str(exc)
+            return False, str(exc), None
     else:
         # Linux/macOS: lp
         try:
             cmd = ["lp"]
             if printer_name:
                 cmd += ["-d", printer_name]
+            if doc_name:
+                cmd += ["-t", doc_name]
             cmd.append(image_path)
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if result.returncode == 0:
-                return True, result.stdout.strip()
-            return False, result.stderr.strip()
+                return True, result.stdout.strip(), None
+            return False, result.stderr.strip(), None
         except Exception as exc:
-            return False, str(exc)
+            return False, str(exc), None
 MAX_UPLOAD  = 20 * 1024 * 1024  # 20 MB
 
 
@@ -537,7 +702,7 @@ def make_admin_app(
 
     # ── Imprimir ──────────────────────────────────────────────────────────────
     async def print_strip(request):
-        """Recibe { image_b64: "...", path: "..." } y manda a imprimir."""
+        """Recibe { image_b64, path, eventId, session } y manda a imprimir."""
         try:
             body = await request.json()
         except Exception:
@@ -545,9 +710,21 @@ def make_admin_app(
 
         image_b64  = body.get("image_b64")
         image_path = body.get("path")
+        session_n  = body.get("session")
+        event_id   = body.get("eventId") or em.active_id
 
         tmp_file = None
         try:
+            if session_n is not None and not image_b64 and not image_path:
+                strip_path = em.get_strip_path(event_id, session_n)
+                if not strip_path:
+                    return _err("Tira no encontrada")
+                image_path = str(strip_path)
+                try:
+                    session_n = int(session_n)
+                except (TypeError, ValueError):
+                    session_n = None
+
             if image_b64:
                 suffix = ".jpg"
                 tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix)
@@ -564,38 +741,88 @@ def make_admin_app(
             pc          = settings_ref.get("print_config") or {}
             copies      = max(1, min(10, int(pc.get("copies", 1))))
             loop        = asyncio.get_event_loop()
+            job_id      = uuid.uuid4().hex[:8]
+            doc_tag     = f"PHOTOBOOTH|{job_id}"
+            printer_lbl = printer or "impresora predeterminada"
 
-            # Notificar inicio de impresión a todos los clientes WS
+            with _print_lock:
+                _print_job.update({
+                    "id": job_id,
+                    "cancel": False,
+                    "printer": printer,
+                    "doc_tag": doc_tag,
+                    "spooler_jobs": [],
+                    "session": session_n,
+                })
+
             if broadcast_fn:
                 try:
                     await broadcast_fn({
                         "type":    "print_start",
-                        "printer": printer or "impresora predeterminada",
+                        "jobId":   job_id,
+                        "printer": printer_lbl,
                         "copies":  copies,
+                        "session": session_n,
                     })
                 except Exception:
                     pass
 
             last_ok, last_msg = False, "Sin copias"
-            for _ in range(copies):
-                last_ok, last_msg = await loop.run_in_executor(
-                    None, _print_image, image_path, printer
+            cancelled = False
+            for i in range(copies):
+                with _print_lock:
+                    if _print_job.get("id") == job_id and _print_job.get("cancel"):
+                        cancelled = True
+                        last_ok, last_msg = False, "Cancelado"
+                        break
+                doc_name = f"{doc_tag}|{i + 1}"
+                last_ok, last_msg, spooler_id = await loop.run_in_executor(
+                    None, _print_image, image_path, printer, doc_name
                 )
+                if spooler_id:
+                    with _print_lock:
+                        if _print_job.get("id") == job_id:
+                            _print_job["spooler_jobs"].append(spooler_id)
+                with _print_lock:
+                    if _print_job.get("id") == job_id and _print_job.get("cancel"):
+                        cancelled = True
+                        _purge_printer_queue(printer)
+                        last_ok, last_msg = False, "Cancelado"
+                        break
 
-            # Notificar resultado a todos los clientes WS
+            with _print_lock:
+                cancelled = cancelled or bool(
+                    _print_job.get("id") == job_id and _print_job.get("cancel")
+                )
+                if _print_job.get("id") == job_id:
+                    _print_job.update({
+                        "id": None,
+                        "cancel": False,
+                        "doc_tag": None,
+                        "spooler_jobs": [],
+                        "session": None,
+                    })
+
             if broadcast_fn:
                 try:
                     await broadcast_fn({
-                        "type":    "print_done",
-                        "ok":      last_ok,
-                        "msg":     last_msg,
-                        "copies":  copies,
-                        "printer": printer or "impresora predeterminada",
+                        "type":      "print_done",
+                        "ok":        last_ok and not cancelled,
+                        "cancelled": cancelled,
+                        "msg":       "Cancelado" if cancelled else last_msg,
+                        "copies":    copies,
+                        "printer":   printer_lbl,
+                        "session":   session_n,
                     })
                 except Exception:
                     pass
 
-            return _ok({"ok": last_ok, "msg": last_msg, "copies": copies})
+            return _ok({
+                "ok": last_ok and not cancelled,
+                "cancelled": cancelled,
+                "msg": "Cancelado" if cancelled else last_msg,
+                "copies": copies,
+            })
         except Exception as exc:
             return _err(str(exc))
         finally:
@@ -604,6 +831,77 @@ def make_admin_app(
                     os.remove(tmp_file)
                 except Exception:
                     pass
+
+    async def cancel_print(request):
+        """Cancela el job actual y vacía toda la cola de la impresora."""
+        with _print_lock:
+            printer = _print_job.get("printer") or settings_ref.get("printer_name")
+            had_job = bool(_print_job.get("id"))
+            _print_job["cancel"] = True
+            session_n = _print_job.get("session")
+        printer = _resolve_printer(printer)
+        loop = asyncio.get_event_loop()
+        n = await loop.run_in_executor(None, _purge_printer_queue, printer)
+        if had_job and broadcast_fn:
+            try:
+                await broadcast_fn({
+                    "type":      "print_done",
+                    "ok":        False,
+                    "cancelled": True,
+                    "msg":       f"Cola vaciada ({n})" if n else "Cancelado",
+                    "copies":    0,
+                    "printer":   printer or "impresora predeterminada",
+                    "session":   session_n,
+                })
+            except Exception:
+                pass
+        return _ok({
+            "ok": True,
+            "cancelledJobs": n,
+            "msg": f"Cola vaciada ({n})" if n else "Cola vacía",
+        })
+
+    async def get_print_queue(request):
+        printer = _resolve_printer(settings_ref.get("printer_name"))
+        loop = asyncio.get_event_loop()
+        jobs = await loop.run_in_executor(None, _list_spooler_jobs, printer)
+        return _ok({
+            "printer": printer,
+            "count":   len(jobs),
+            "jobs":    jobs,
+        })
+
+    async def list_event_strips(request):
+        eid = request.match_info["id"]
+        if eid not in em.events:
+            return _err("Evento no encontrado", 404)
+        return _ok({"strips": em.list_strips(eid)})
+
+    async def get_event_strip(request):
+        eid = request.match_info["id"]
+        try:
+            n = int(request.match_info["n"])
+        except (TypeError, ValueError):
+            return _err("Número de tira inválido")
+        path = em.get_strip_path(eid, n)
+        if not path:
+            return _err("Tira no encontrada", 404)
+        thumb = str(request.query.get("thumb", "")).lower() in ("1", "true", "yes")
+        if thumb:
+            from PIL import Image
+            img = Image.open(path)
+            img.thumbnail((280, 900))
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=72)
+            return web.Response(
+                body=buf.getvalue(),
+                content_type="image/jpeg",
+                headers={**_cors(), "Cache-Control": "private, max-age=3600"},
+            )
+        return web.FileResponse(
+            path,
+            headers={**_cors(), "Cache-Control": "private, max-age=60"},
+        )
 
     async def print_preview(request):
         """
@@ -847,6 +1145,10 @@ def make_admin_app(
     app.router.add_get(    "/api/printers",                      get_printers)
     app.router.add_post(   "/api/printers/select",               select_printer)
     app.router.add_post(   "/api/print",                         print_strip)
+    app.router.add_post(   "/api/print/cancel",                  cancel_print)
+    app.router.add_get(    "/api/print/queue",                   get_print_queue)
+    app.router.add_get(    "/api/events/{id}/strips",            list_event_strips)
+    app.router.add_get(    "/api/events/{id}/strips/{n}",        get_event_strip)
     app.router.add_post(   "/api/print-preview",                 print_preview)
     app.router.add_get(    "/api/print-config",                  get_print_config)
     app.router.add_post(   "/api/print-config",                  set_print_config)
