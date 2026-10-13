@@ -121,7 +121,14 @@ function Cabin360Inner() {
     try {
       const r = await fetch(`${API}/api/360/events/${encodeURIComponent(selectedId)}/jobs`)
       const j = await r.json()
-      setJobs(j.jobs || [])
+      const list = j.jobs || []
+      // Evitar filas fantasma si el poll y el POST se pisan
+      const seen = new Set()
+      setJobs(list.filter(job => {
+        if (!job?.id || seen.has(job.id)) return false
+        seen.add(job.id)
+        return true
+      }))
     } catch { /* ignore */ }
   }, [selectedId])
 
@@ -250,23 +257,27 @@ function Cabin360Inner() {
   }
 
   const uploadVideos = async (fileList) => {
-    if (!selected || !fileList?.length || !ready) return
+    if (!selected || !fileList?.length || !ready || uploading) return
+    const files = Array.from(fileList)
+    if (!files.length) return
     setUploading(true)
     setError(null)
+    // Limpiar el input ya: evita re-disparar el mismo selection
+    if (fileRef.current) fileRef.current.value = ''
     try {
       const fd = new FormData()
-      Array.from(fileList).forEach(f => fd.append('videos', f))
+      files.forEach(f => fd.append('videos', f))
       const r = await fetch(`${API}/api/360/events/${encodeURIComponent(selected.id)}/videos`, {
         method: 'POST', body: fd,
       })
       const j = await r.json()
       if (j.error) throw new Error(j.error)
-      setJobs(prev => [...(j.jobs || []), ...prev])
+      // No concatenar: el poll ya puede tener estos jobs → eso duplicaba la lista
+      await fetchJobs()
     } catch (e) {
       setError(e.message || 'Error al subir videos')
     } finally {
       setUploading(false)
-      if (fileRef.current) fileRef.current.value = ''
     }
   }
 
