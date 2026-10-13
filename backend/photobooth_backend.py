@@ -37,6 +37,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from events_manager import EventsManager
 from templates_manager import TemplatesManager
 from admin_api import start_admin_server
+from cabin360_api import start_cabin360_server
+from cabin360_manager import Cabin360Manager
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 PHOTOS_DIR     = os.path.join(os.path.dirname(__file__), "..", "photos")
@@ -820,9 +822,12 @@ class PhotoboothBackend:
                 self._apply_focus_settings,
                 self._open_camera_settings_dialog,
             )
+            cabin360_mgr = Cabin360Manager()
+            cabin360_runner = await start_cabin360_server(cabin360_mgr)
             try:
                 await self.capture_loop()
             finally:
+                await cabin360_runner.cleanup()
                 await admin_runner.cleanup()
 
         if self.cap is not None:

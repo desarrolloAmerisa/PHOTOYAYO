@@ -8,4 +8,7 @@ contextBridge.exposeInMainWorld('electronBridge', {
   openAdmin:        () => ipcRenderer.send('open-admin'),
   toggleFullscreen: () => ipcRenderer.send('toggle-fullscreen'),
   isFullscreen:     () => ipcRenderer.invoke('is-fullscreen'),
+  launchPhotos:     () => ipcRenderer.send('launch-photos'),
+  launch360:        () => ipcRenderer.send('launch-360'),
 })
+

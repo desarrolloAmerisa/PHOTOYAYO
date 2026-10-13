@@ -9,8 +9,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main:  resolve(__dirname, 'index.html'),
-        admin: resolve(__dirname, 'admin.html'),
+        main:     resolve(__dirname, 'index.html'),
+        admin:    resolve(__dirname, 'admin.html'),
+        launcher: resolve(__dirname, 'launcher.html'),
+        cabin360: resolve(__dirname, 'cabin360.html'),
       },
     },
   },
