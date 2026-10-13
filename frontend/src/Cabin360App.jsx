@@ -16,11 +16,11 @@ const PHASE_LABEL = {
   error:           'Error',
 }
 
-function phaseColor(phase) {
-  if (phase === 'done') return 'text-emerald-400'
-  if (phase === 'error') return 'text-red-400'
-  if (phase === 'queued' || phase === 'saving') return 'text-white/50'
-  return 'text-sky-300'
+function phaseColor(phase, isDark) {
+  if (phase === 'done') return isDark ? 'text-emerald-400' : 'text-emerald-700'
+  if (phase === 'error') return isDark ? 'text-red-400' : 'text-red-600'
+  if (phase === 'queued' || phase === 'saving') return isDark ? 'text-white/50' : 'text-gray-600'
+  return isDark ? 'text-sky-300' : 'text-sky-700'
 }
 
 function isConfigured(evt) {
@@ -412,6 +412,13 @@ function Cabin360Inner() {
         </div>
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' }}>
           <button
+            onClick={() => window.electronBridge?.returnToLauncher?.()}
+            className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${t.borderMed} ${t.bgCard} ${t.text} ${t.bgHover}`}
+            title="Volver al menú de selección"
+          >
+            ← Menú
+          </button>
+          <button
             onClick={() => { setShowSetup(true); fetchSetup(); setSetupMsg('') }}
             className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${t.borderMed} ${t.bgCard} ${t.textMuted}`}
           >
@@ -445,7 +452,7 @@ function Cabin360Inner() {
             <div>
               <h2 className={`text-xl font-black ${t.text}`}>Configuración de Cabina 360</h2>
               <p className={`text-sm mt-1 ${t.textMuted}`}>
-                Solo verifica que exista la carpeta <span className="font-mono text-white/70">ffmpeg-7.1.1-full_build</span> en el proyecto y las demás dependencias.
+                Solo verifica que exista la carpeta <span className={`font-mono ${t.text}`}>ffmpeg-7.1.1-full_build</span> en el proyecto y las demás dependencias.
               </p>
             </div>
             <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -551,7 +558,7 @@ function Cabin360Inner() {
                   onClick={() => selectEvent(evt.id)}
                   className={`w-full text-left rounded-lg px-3 py-2.5 transition-colors
                     ${selectedId === evt.id && !creating
-                      ? 'bg-pink-500/15 text-white'
+                      ? `bg-pink-500/15 ${t.text}`
                       : `${t.textMuted} ${t.bgHover}`}`}
                 >
                   <p className="text-sm font-semibold truncate">{evt.name || 'Sin nombre'}</p>
@@ -703,8 +710,9 @@ function Cabin360Inner() {
                       <button
                         disabled={frameBusy}
                         onClick={() => frameRef.current?.click()}
-                        className="flex-1 py-2 rounded-lg text-xs font-bold text-sky-300
-                                   bg-sky-500/10 border border-sky-500/20 hover:bg-sky-500/15"
+                        className={`flex-1 py-2 rounded-lg text-xs font-bold
+                                   bg-sky-500/10 border border-sky-500/20 hover:bg-sky-500/15
+                                   ${isDark ? 'text-sky-300' : 'text-sky-700'}`}
                       >
                         {frameBusy ? '…' : selected.hasFrame ? 'Cambiar' : 'Subir PNG'}
                       </button>
@@ -797,12 +805,12 @@ function Cabin360Inner() {
                                 <p className={`text-sm font-semibold truncate ${t.text}`}>
                                   {job.name || job.originalName}
                                 </p>
-                                <span className={`text-[11px] font-bold flex-shrink-0 ${phaseColor(job.phase)}`}>
+                                <span className={`text-[11px] font-bold flex-shrink-0 ${phaseColor(job.phase, isDark)}`}>
                                   {PHASE_LABEL[job.phase] || job.phase}
                                 </span>
                               </div>
                               <p className={`text-[11px] mt-0.5 truncate ${t.textFaint}`}>{job.msg}</p>
-                              <div className="mt-2 h-1 rounded-full bg-white/10 overflow-hidden">
+                              <div className={`mt-2 h-1 rounded-full overflow-hidden ${isDark ? 'bg-white/10' : 'bg-black/10'}`}>
                                 <div
                                   className={`h-full rounded-full transition-all duration-500 ${
                                     job.phase === 'error' ? 'bg-red-500' :
@@ -817,7 +825,9 @@ function Cabin360Inner() {
                           <div className="flex items-center gap-2 pl-[68px]">
                             <button
                               onClick={() => openLogs(job.id)}
-                              className={`text-[11px] font-semibold ${t.textMuted} hover:text-white`}
+                              className={`text-[11px] font-semibold ${t.textMuted} ${
+                                isDark ? 'hover:text-white' : 'hover:text-gray-900'
+                              }`}
                             >
                               Ver logs
                             </button>

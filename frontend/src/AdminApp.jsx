@@ -26,15 +26,24 @@ export default function AdminApp() {
 
 // ── Ítem del checklist de configuración ──────────────────────────────────────
 function CheckItem({ ok, label, onFix }) {
+  const { isDark } = useTheme()
   return (
     <button
       onClick={!ok ? onFix : undefined}
       className={`flex items-center gap-1.5 text-xs font-semibold transition-colors
-        ${ok ? 'text-emerald-400 cursor-default' : 'text-amber-300 hover:text-white underline underline-offset-2'}`}
+        ${ok
+          ? (isDark ? 'text-emerald-400 cursor-default' : 'text-emerald-700 cursor-default')
+          : (isDark
+            ? 'text-amber-300 hover:text-white underline underline-offset-2'
+            : 'text-amber-700 hover:text-gray-900 underline underline-offset-2')}`}
     >
       <span>{ok ? '✓' : '✗'}</span>
       <span>{label}</span>
-      {!ok && <span className="text-amber-400/60 font-normal no-underline">(configurar →)</span>}
+      {!ok && (
+        <span className={`font-normal no-underline ${isDark ? 'text-amber-400/60' : 'text-amber-700/70'}`}>
+          (configurar →)
+        </span>
+      )}
     </button>
   )
 }
@@ -262,6 +271,14 @@ function AdminAppInner() {
 
         {/* Controles de ventana + toggle tema */}
         <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' }}>
+          <button
+            onClick={() => window.electronBridge?.returnToLauncher?.()}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold
+                        transition-colors border ${t.borderMed} ${t.bgCard} ${t.text} ${t.bgHover}`}
+            title="Volver al menú de selección"
+          >
+            ← Menú
+          </button>
           {/* Botón debug */}
           <button
             onClick={toggleDebug}

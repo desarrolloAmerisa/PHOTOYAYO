@@ -318,6 +318,15 @@ export default function App() {
           </span>
         )}
         <button
+          onClick={() => window.electronBridge?.returnToLauncher?.()}
+          className="px-2.5 py-1 rounded-lg text-xs font-bold text-white/80
+                     bg-white/10 hover:bg-white/20 border border-white/15
+                     transition-colors focus:outline-none"
+          title="Volver al menú de selección"
+        >
+          ← Menú
+        </button>
+        <button
           onClick={() => window.electronBridge?.minimizeWindow()}
           className="w-3 h-3 rounded-full bg-yellow-400/80 hover:bg-yellow-400
                      transition-colors focus:outline-none"

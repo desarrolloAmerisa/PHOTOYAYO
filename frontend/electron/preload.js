@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('electronBridge', {
   isFullscreen:     () => ipcRenderer.invoke('is-fullscreen'),
   launchPhotos:     () => ipcRenderer.send('launch-photos'),
   launch360:        () => ipcRenderer.send('launch-360'),
+  returnToLauncher: () => ipcRenderer.send('return-to-launcher'),
 })
 

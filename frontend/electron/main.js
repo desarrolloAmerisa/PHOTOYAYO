@@ -183,6 +183,23 @@ app.whenReady().then(() => {
     if (launcherWindow) launcherWindow.hide()
   })
 
+  ipcMain.on('return-to-launcher', () => {
+    if (adminWindow) {
+      const w = adminWindow
+      adminWindow = null
+      w.close()
+    }
+    if (mainWindow) {
+      mainWindow.close()
+      return
+    }
+    if (cabin360Window) {
+      cabin360Window.close()
+      return
+    }
+    returnToLauncher()
+  })
+
   createLauncherWindow()
 })
 

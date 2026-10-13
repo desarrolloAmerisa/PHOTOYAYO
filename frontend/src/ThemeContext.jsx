@@ -48,21 +48,22 @@ export const LIGHT = {
   bgHover:     'hover:bg-black/8',
   bgSection:   'bg-black/3',
 
+  // Contraste alto: en claro los grises claros se pierden sobre #F5F5F7
   text:        'text-gray-900',
-  textMuted:   'text-gray-500',
-  textFaint:   'text-gray-400',
-  textUltra:   'text-gray-300',
+  textMuted:   'text-gray-700',
+  textFaint:   'text-gray-600',
+  textUltra:   'text-gray-500',
 
   border:      'border-black/8',
   borderMed:   'border-black/12',
   borderFaint: 'border-black/8',
 
-  input: 'bg-black/5 border border-black/12 text-gray-900 placeholder-gray-400 focus:border-pink-500/70 focus:bg-black/8',
+  input: 'bg-black/5 border border-black/12 text-gray-900 placeholder-gray-500 focus:border-pink-500/70 focus:bg-black/8',
 
   badge: 'bg-emerald-500/15 text-emerald-700 border border-emerald-500/30',
 
-  label: 'text-gray-500',
-  hint:  'text-gray-400',
+  label: 'text-gray-600',
+  hint:  'text-gray-500',
 
   dangerZone: 'bg-red-500/5 border-red-400/20',
 

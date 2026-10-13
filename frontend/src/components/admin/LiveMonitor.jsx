@@ -4,13 +4,22 @@ import { useTheme } from '../../ThemeContext'
 
 const API = 'http://localhost:8766'
 
-const STATE_META = {
+const STATE_META_DARK = {
   idle:       { label: 'Esperando',     color: 'text-white/60 bg-white/10' },
   mirror:     { label: 'Espejo',        color: 'text-sky-300 bg-sky-500/15' },
   countdown:  { label: 'Cuenta atrás',  color: 'text-amber-300 bg-amber-500/15' },
   taking:     { label: 'Tomando fotos', color: 'text-pink-300 bg-pink-500/15' },
   preview:    { label: 'Vista previa',  color: 'text-emerald-300 bg-emerald-500/15' },
   connecting: { label: 'Conectando',    color: 'text-white/50 bg-white/10' },
+}
+
+const STATE_META_LIGHT = {
+  idle:       { label: 'Esperando',     color: 'text-gray-700 bg-black/8' },
+  mirror:     { label: 'Espejo',        color: 'text-sky-700 bg-sky-500/15' },
+  countdown:  { label: 'Cuenta atrás',  color: 'text-amber-700 bg-amber-500/15' },
+  taking:     { label: 'Tomando fotos', color: 'text-pink-700 bg-pink-500/15' },
+  preview:    { label: 'Vista previa',  color: 'text-emerald-700 bg-emerald-500/15' },
+  connecting: { label: 'Conectando',    color: 'text-gray-600 bg-black/8' },
 }
 
 function formatTime(ts) {
@@ -39,7 +48,8 @@ export default function LiveMonitor({
   onStartSession,
   onCancelPrint,
 }) {
-  const { t } = useTheme()
+  const { t, isDark } = useTheme()
+  const STATE_META = isDark ? STATE_META_DARK : STATE_META_LIGHT
   const [strips, setStrips]       = useState([])
   const [loading, setLoading]     = useState(false)
   const [selected, setSelected]   = useState(null)
