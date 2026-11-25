@@ -113,6 +113,10 @@ function AdminAppInner() {
   const [liveStrip,       setLiveStrip]       = useState(null)
   const [liveSession,     setLiveSession]     = useState(null)
   const [liveEvent,       setLiveEvent]       = useState(null)
+  const [captureMode,     setCaptureMode]     = useState('auto') // 'auto' | 'manual'
+  const [testSession,     setTestSession]     = useState(false)
+  const [cancelMsg,       setCancelMsg]       = useState(null)
+  const cancelMsgTimer = useRef(null)
 
   const sendWs = useWebSocket(WS_URL, useCallback((msg) => {
     if (msg.type === 'frame') {
@@ -126,8 +130,19 @@ function AdminAppInner() {
       if (msg.totalPhotos !== undefined) setLiveTotalPhotos(msg.totalPhotos)
       if (msg.photoCount  !== undefined) setLivePhotoCount(msg.photoCount)
       if (msg.session     !== undefined) setLiveSession(msg.session)
-      if (msg.state === 'idle')      { setLiveStrip(null); setLivePhotoCount(0); setLivePhotos([]) }
-      if (msg.state === 'countdown') { setLivePhotos([]); setLiveStrip(null) }
+      if (msg.captureMode !== undefined) setCaptureMode(msg.captureMode)
+      if (msg.test !== undefined) setTestSession(!!msg.test)
+      if (msg.state === 'idle') {
+        setLiveStrip(null)
+        setLivePhotoCount(0)
+        setLivePhotos([])
+        setTestSession(false)
+      }
+      // Solo limpiar thumbs al iniciar la sesión (foto 0), no al reanudar manual
+      if (msg.state === 'countdown' && !msg.photoCount) {
+        setLivePhotos([])
+        setLiveStrip(null)
+      }
     }
     if (msg.type === 'countdown') {
       if (msg.value !== undefined) setLiveCountdown(msg.value)
@@ -135,10 +150,28 @@ function AdminAppInner() {
     if (msg.type === 'flash') {
       setLivePhotoCount(msg.photoNum)
       if (msg.photo) setLivePhotos(prev => [...prev, msg.photo])
+      if (msg.test !== undefined) setTestSession(!!msg.test)
     }
     if (msg.type === 'strip') {
       setLiveStrip(msg.data)
       if (msg.session !== undefined) setLiveSession(msg.session)
+      if (msg.test !== undefined) setTestSession(!!msg.test)
+    }
+    if (msg.type === 'capture_mode') {
+      if (msg.mode) setCaptureMode(msg.mode)
+    }
+    if (msg.type === 'session_cancelled') {
+      setLiveStrip(null)
+      setLivePhotoCount(0)
+      setLivePhotos([])
+      setTestSession(false)
+      clearTimeout(cancelMsgTimer.current)
+      setCancelMsg(
+        msg.test
+          ? 'Sesión de prueba cancelada'
+          : `Sesión cancelada${msg.deleted?.length ? ` · ${msg.deleted.length} archivo(s) borrado(s)` : ''}`
+      )
+      cancelMsgTimer.current = setTimeout(() => setCancelMsg(null), 4000)
     }
     if (msg.type === 'init') {
       setDbState(msg.state || 'idle')
@@ -146,6 +179,10 @@ function AdminAppInner() {
       setLiveEvent(msg.activeEvent || null)
       if (msg.activeId !== undefined) setActiveId(msg.activeId || null)
       setLiveTotalPhotos(msg.activeEvent?.photoCount ?? 3)
+      if (msg.captureMode) setCaptureMode(msg.captureMode)
+      if (msg.photoCount !== undefined) setLivePhotoCount(msg.photoCount)
+      if (msg.totalPhotos !== undefined) setLiveTotalPhotos(msg.totalPhotos)
+      setTestSession(!!msg.test)
     }
     if (msg.type === 'active_event') {
       setLiveEvent(msg.activeEvent || null)
@@ -181,7 +218,17 @@ function AdminAppInner() {
 
   const toggleDebug = () => sendWs({ type: 'toggle_debug' })
   const startSession = () => {
-    if (dbState === 'idle' || dbState === 'mirror') sendWs({ type: 'start_session' })
+    if (dbState === 'idle' || dbState === 'mirror' || dbState === 'waiting') {
+      sendWs({ type: 'start_session' })
+    }
+  }
+  const cancelSession = () => {
+    // Siempre enviar: el backend decide si hay sesión activa (waiting/manual incluido)
+    sendWs({ type: 'cancel_session' })
+  }
+  const setCaptureModeRemote = (mode) => {
+    if (dbState !== 'idle' && dbState !== 'mirror') return
+    sendWs({ type: 'set_capture_mode', mode })
   }
   const cancelPrint = async () => {
     try {
@@ -189,15 +236,28 @@ function AdminAppInner() {
     } catch { /* el toast se actualiza por WS */ }
   }
 
-  // Espacio también inicia sesión desde el panel admin (sin ir a la ventana de cámara)
+  // Espacio = sesión real / siguiente foto manual; P = prueba; C = cancelar
   useEffect(() => {
     const onKey = (e) => {
-      if (e.code !== 'Space' && e.key !== ' ') return
       const tag = (e.target?.tagName || '').toLowerCase()
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return
-      e.preventDefault()
-      if (dbState === 'idle' || dbState === 'mirror') {
-        sendWs({ type: 'start_session' })
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault()
+        if (dbState === 'idle' || dbState === 'mirror' || dbState === 'waiting') {
+          sendWs({ type: 'start_session' })
+        }
+        return
+      }
+      if (e.key === 'p' || e.key === 'P') {
+        if (dbState === 'idle' || dbState === 'mirror') {
+          sendWs({ type: 'start_session', test: true })
+        }
+        return
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        if (['countdown', 'taking', 'waiting', 'preview'].includes(dbState)) {
+          sendWs({ type: 'cancel_session' })
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -430,7 +490,17 @@ function AdminAppInner() {
                     activeEvent={liveEvent || events.find(e => e.id === activeId) || null}
                     activeId={activeId}
                     printJob={printJob}
+                    captureMode={captureMode}
+                    onCaptureModeChange={setCaptureModeRemote}
+                    testSession={testSession}
+                    cancelMsg={cancelMsg}
                     onStartSession={startSession}
+                    onStartTestSession={() => {
+                      if (dbState === 'idle' || dbState === 'mirror') {
+                        sendWs({ type: 'start_session', test: true })
+                      }
+                    }}
+                    onCancelSession={cancelSession}
                     onCancelPrint={cancelPrint}
                   />
                 </motion.div>

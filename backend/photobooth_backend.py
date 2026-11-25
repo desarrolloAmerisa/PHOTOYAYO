@@ -13,6 +13,9 @@ Mensajes  →  cliente:
 
 Mensajes  ←  cliente:
   toggle_debug
+  start_session   { test?: bool }  — idle/mirror inicia; waiting (manual) reanuda
+  set_capture_mode { mode: "auto"|"manual" }  — solo fuera de sesión
+  cancel_session  — cancela sesión en curso y borra fotos/tira locales
   quit
 """
 
@@ -356,6 +359,7 @@ class PhotoboothBackend:
         self.session_start   = 0.0
         self.preview_start   = 0.0
         self.flash_until     = 0.0
+        self.test_session    = False  # P: preview only — sin disco, print ni ingest
 
         # Configuración hardware (persistida en settings.json)
         self.settings = load_settings()
@@ -372,6 +376,8 @@ class PhotoboothBackend:
         # Config de la sesión actual
         self.session_burst     = BURST_COUNT
         self.session_countdown = COUNTDOWN_SECS
+        # auto = ráfaga con timer del evento; manual = Espacio → 10s → foto → espera
+        self.capture_mode      = "auto"
 
         # Anti-spam de countdown
         self._last_cdown_val = -1
@@ -393,11 +399,15 @@ class PhotoboothBackend:
         self.clients.add(websocket)
         print(f"[WS] Cliente conectado  ({len(self.clients)} total)")
         await websocket.send(json.dumps({
-            "type":        "init",
-            "state":       self.state,
-            "debug":       self.debug_mode,
-            "activeEvent": self.events_mgr.get_active(),
-            "activeId":    self.events_mgr.active_id,
+            "type":         "init",
+            "state":        self.state,
+            "debug":        self.debug_mode,
+            "activeEvent":  self.events_mgr.get_active(),
+            "activeId":     self.events_mgr.active_id,
+            "captureMode":  self.capture_mode,
+            "test":         self.test_session,
+            "photoCount":   self.photo_count,
+            "totalPhotos":  self.session_burst,
         }))
         try:
             async for raw in websocket:
@@ -420,10 +430,31 @@ class PhotoboothBackend:
                 self.state = "idle"
                 self.palm_cooldown = time.time() + 1.0
                 await self.broadcast({"type": "state", "state": "idle"})
+        elif t == "set_capture_mode":
+            mode = (msg.get("mode") or "").strip().lower()
+            if mode not in ("auto", "manual"):
+                return
+            # Solo se puede cambiar fuera de sesión
+            if self.state not in ("idle", "mirror"):
+                await self.broadcast({
+                    "type": "capture_mode",
+                    "mode": self.capture_mode,
+                    "locked": True,
+                    "msg": "No se puede cambiar el modo durante la sesión",
+                })
+                return
+            self.capture_mode = mode
+            print(f"[MODE] Captura → {mode}")
+            await self.broadcast({"type": "capture_mode", "mode": mode, "locked": False})
         elif t == "start_session":
-            # Fallback: iniciar sesión por teclado (barra espaciadora)
+            # Espacio = sesión real; P = prueba (solo preview)
+            # En manual, Espacio también reanuda la siguiente foto
             if self.state in ("idle", "mirror"):
-                await self._start_session()
+                await self._start_session(test=bool(msg.get("test")))
+            elif self.state == "waiting" and self.capture_mode == "manual":
+                await self._resume_manual_shot()
+        elif t == "cancel_session":
+            await self._cancel_session()
         elif t == "quit":
             self.running = False
 
@@ -488,13 +519,23 @@ class PhotoboothBackend:
                 self.state       = "taking"
                 self.next_shot_at = now
                 self._last_cdown_val = -1
-                await self.broadcast({"type": "state", "state": "taking",
-                                      "photoCount": 0, "totalPhotos": self.session_burst})
+                await self.broadcast({
+                    "type": "state",
+                    "state": "taking",
+                    "photoCount": self.photo_count,
+                    "totalPhotos": self.session_burst,
+                    "captureMode": self.capture_mode,
+                    "test": self.test_session,
+                })
             else:
                 val = int(remaining) + 1
                 if val != self._last_cdown_val:
                     self._last_cdown_val = val
-                    await self.broadcast({"type": "countdown", "value": val, "photoNum": 1})
+                    await self.broadcast({
+                        "type": "countdown",
+                        "value": val,
+                        "photoNum": self.photo_count + 1,
+                    })
 
         elif self.state == "taking":
             if now >= self.next_shot_at:
@@ -508,10 +549,15 @@ class PhotoboothBackend:
                                           "value":    val,
                                           "photoNum": self.photo_count + 1})
 
+        elif self.state == "waiting":
+            # Modo manual: esperando Espacio para la siguiente foto
+            pass
+
         elif self.state == "preview":
             if now - self.preview_start >= PREVIEW_SECS:
                 self.state = "idle"
-                await self.broadcast({"type": "state", "state": "idle"})
+                self.test_session = False
+                await self.broadcast({"type": "state", "state": "idle", "test": False})
 
         # Render — overlay + encode en executor para no bloquear el loop
         active = self.events_mgr.get_active()
@@ -542,11 +588,12 @@ class PhotoboothBackend:
             "debugMode": self.debug_mode,
         })
 
-    async def _start_session(self):
+    async def _start_session(self, test: bool = False):
         self.state         = "countdown"
         self.session_start = time.time()
         self.photo_count   = 0
         self.photos_taken  = []
+        self.test_session  = bool(test)
         active = self.events_mgr.get_active()
         # Si el evento usa una plantilla interactiva, el número de fotos viene
         # del max(photoIndex) de los slots; si no, usa el campo del evento.
@@ -561,19 +608,129 @@ class PhotoboothBackend:
             self.session_burst = active.get("photoCount", BURST_COUNT)
         else:
             self.session_burst = BURST_COUNT
+        # Auto y manual usan el temporizador del evento (timerSecs)
         self.session_countdown = active.get("timerSecs", COUNTDOWN_SECS) if active else COUNTDOWN_SECS
-        if active:
-            base_dir = str(self.events_mgr.get_sessions_dir(active["id"]))
+        if self.test_session:
+            # Prueba: no toca carpetas del evento ni numera sesión real
+            self.session_dir = None
+            self.session_num = 0
         else:
-            base_dir = PHOTOS_DIR
-        os.makedirs(base_dir, exist_ok=True)
-        self.session_dir = base_dir
-        self.session_num = next_session_number(base_dir)
+            if active:
+                base_dir = str(self.events_mgr.get_sessions_dir(active["id"]))
+            else:
+                base_dir = PHOTOS_DIR
+            os.makedirs(base_dir, exist_ok=True)
+            self.session_dir = base_dir
+            self.session_num = next_session_number(base_dir)
         self.peace_held_since = None
         self._last_cdown_val  = -1
-        await self.broadcast({"type": "state", "state": "countdown",
-                               "totalPhotos": self.session_burst})
-        print(f"\n📸  Sesión {self.session_num} ({self.session_burst} fotos, {self.session_countdown}s) → {self.session_dir}")
+        await self.broadcast({
+            "type": "state",
+            "state": "countdown",
+            "totalPhotos": self.session_burst,
+            "photoCount": 0,
+            "test": self.test_session,
+            "captureMode": self.capture_mode,
+        })
+        mode_lbl = "MANUAL" if self.capture_mode == "manual" else "AUTO"
+        if self.test_session:
+            print(f"\n🧪  Sesión de PRUEBA [{mode_lbl}] ({self.session_burst} fotos, {self.session_countdown}s) — sin guardar / print / ingest")
+        else:
+            print(f"\n📸  Sesión {self.session_num} [{mode_lbl}] ({self.session_burst} fotos, {self.session_countdown}s) → {self.session_dir}")
+
+    async def _resume_manual_shot(self):
+        """Espacio en modo manual: cuenta atrás con timerSecs del evento."""
+        if self.capture_mode != "manual" or self.state != "waiting":
+            return
+        if self.photo_count >= self.session_burst:
+            return
+        active = self.events_mgr.get_active()
+        self.state = "countdown"
+        self.session_start = time.time()
+        self.session_countdown = active.get("timerSecs", COUNTDOWN_SECS) if active else COUNTDOWN_SECS
+        self._last_cdown_val = -1
+        await self.broadcast({
+            "type": "state",
+            "state": "countdown",
+            "totalPhotos": self.session_burst,
+            "photoCount": self.photo_count,
+            "test": self.test_session,
+            "captureMode": "manual",
+        })
+        print(f"  ▶️  Manual: foto {self.photo_count + 1}/{self.session_burst} en {self.session_countdown}s")
+
+    async def _cancel_session(self):
+        """C: cancela la sesión en curso y borra fotos/tira guardadas."""
+        # Cualquier estado de sesión activa (incluye waiting del modo manual)
+        if self.state in ("idle", "mirror", "connecting"):
+            print(f"[CANCEL] ignorado — estado actual: {self.state}")
+            return
+
+        was_test = self.test_session
+        prev_state = self.state
+        sdir = self.session_dir
+        snum = self.session_num
+        taken = self.photo_count
+        deleted = []
+
+        def _wipe():
+            if was_test or not sdir or not snum:
+                return []
+            if not os.path.isdir(sdir):
+                return []
+            removed = []
+            # fotos de la sesión + tira si existiera
+            for name in os.listdir(sdir):
+                low = name.lower()
+                if low.startswith(f"foto{snum}_") or low == f"tira{snum}.jpg":
+                    path = os.path.join(sdir, name)
+                    try:
+                        os.remove(path)
+                        removed.append(name)
+                    except OSError as exc:
+                        print(f"  [CANCEL] no se pudo borrar {name}: {exc}")
+            return removed
+
+        loop = asyncio.get_running_loop()
+        try:
+            deleted = await loop.run_in_executor(self._executor, _wipe)
+        except Exception as exc:
+            print(f"  [CANCEL] error al borrar: {exc}")
+
+        self.state = "idle"
+        self.test_session = False
+        self.photo_count = 0
+        self.photos_taken = []
+        self.session_dir = None
+        self.session_num = 0
+        self.session_start = 0.0
+        self.preview_start = 0.0
+        self.next_shot_at = 0.0
+        self.peace_held_since = None
+        self._last_cdown_val = -1
+        self.palm_cooldown = time.time() + 1.0
+
+        kind = "prueba" if was_test else f"#{snum}"
+        print(
+            f"\n⛔  Sesión {kind} cancelada desde '{prev_state}' "
+            f"({taken} foto(s))"
+            + (f" — borrados: {', '.join(deleted)}" if deleted else " — sin archivos en disco"),
+            flush=True,
+        )
+        await self.broadcast({
+            "type": "session_cancelled",
+            "session": snum if not was_test else None,
+            "test": was_test,
+            "deleted": deleted,
+            "photoCount": taken,
+        })
+        await self.broadcast({
+            "type": "state",
+            "state": "idle",
+            "test": False,
+            "photoCount": 0,
+            "cancelled": True,
+        })
 
     async def _take_photo(self, frame):
         loop        = asyncio.get_running_loop()
@@ -581,6 +738,7 @@ class PhotoboothBackend:
         session_dir = self.session_dir
         session_num = self.session_num
         photo_num   = self.photo_count + 1
+        is_test     = self.test_session
         evmgr       = self.events_mgr
         # Si el evento usa plantilla interactiva, omitir apply_to_photo (legacy overlay)
         has_interactive_tpl = bool(active and active.get("templateId"))
@@ -589,30 +747,42 @@ class PhotoboothBackend:
             photo = frame.copy()
             if active and not has_interactive_tpl:
                 photo = evmgr.apply_to_photo(photo, active["id"])
-            path = os.path.join(session_dir, f"foto{session_num}_{photo_num}.jpg")
-            save_image(path, photo, jpeg_quality=95)
             th = 240
             tw = int(photo.shape[1] * th / photo.shape[0])
             _, tbuf = cv2.imencode(".jpg", cv2.resize(photo, (tw, th)),
                                    [cv2.IMWRITE_JPEG_QUALITY, 82])
-            return photo, base64.b64encode(tbuf).decode(), path
+            thumb_b64 = base64.b64encode(tbuf).decode()
+            if is_test:
+                return photo, thumb_b64, None
+            path = os.path.join(session_dir, f"foto{session_num}_{photo_num}.jpg")
+            save_image(path, photo, jpeg_quality=95)
+            return photo, thumb_b64, path
 
         try:
             photo, photo_b64, photo_path = await loop.run_in_executor(
                 self._executor, _process_and_save
             )
         except Exception as exc:
-            print(f"  [SAVE] ERROR foto{session_num}_{photo_num}.jpg: {exc}")
+            label = f"foto{session_num}_{photo_num}.jpg" if not is_test else f"prueba_{photo_num}"
+            print(f"  [SAVE] ERROR {label}: {exc}")
             raise
         self.photo_count += 1
         self.photos_taken.append(photo)
         self.flash_until = time.time() + FLASH_SECS
-        print(f"  \U0001f4f7  foto{session_num}_{self.photo_count}.jpg → {photo_path}")
-        await self.broadcast({"type": "flash", "photoNum": self.photo_count, "photo": photo_b64})
+        if is_test:
+            print(f"  \U0001f9ea  prueba foto {self.photo_count}/{self.session_burst} (sin guardar)")
+        else:
+            print(f"  \U0001f4f7  foto{session_num}_{self.photo_count}.jpg → {photo_path}")
+        await self.broadcast({
+            "type": "flash",
+            "photoNum": self.photo_count,
+            "photo": photo_b64,
+            "test": is_test,
+        })
 
-        # ECA360: subir foto en background (no bloquea el booth)
+        # ECA360: subir foto en background (no en sesiones de prueba)
         ingest_url = (active or {}).get("ingestUrl") or ""
-        if ingest_url:
+        if ingest_url and photo_path and not is_test:
             asyncio.create_task(upload_to_eca360(ingest_url, photo_path, self.broadcast))
 
         if self.photo_count >= self.session_burst:
@@ -622,6 +792,7 @@ class PhotoboothBackend:
             _active_snap     = self.events_mgr.get_active()
             _templates_mgr   = self.templates_mgr
             _ingest          = (_active_snap or {}).get("ingestUrl") or ""
+            _is_test         = is_test
 
             def _build_strip():
                 tid = _active_snap.get("templateId") if _active_snap else None
@@ -634,28 +805,61 @@ class PhotoboothBackend:
                         strip = make_strip(photos_snap)
                 else:
                     strip = make_strip(photos_snap)
+                _, buf = cv2.imencode(".jpg", strip, [cv2.IMWRITE_JPEG_QUALITY, 88])
+                b64 = base64.b64encode(buf).decode()
+                if _is_test:
+                    return b64, None
                 strip_path = os.path.join(_sdir, f"tira{_snum}.jpg")
                 save_image(strip_path, strip, jpeg_quality=88)
-                _, buf = cv2.imencode(".jpg", strip, [cv2.IMWRITE_JPEG_QUALITY, 88])
-                return base64.b64encode(buf).decode(), strip_path
+                return b64, strip_path
 
             strip_b64, strip_path = await loop.run_in_executor(self._executor, _build_strip)
-            print(f"  \U0001f39e\ufe0f  tira{_snum}.jpg → {strip_path}")
-            if _ingest:
-                asyncio.create_task(upload_to_eca360(_ingest, strip_path, self.broadcast))
+            if _is_test:
+                print("  \U0001f9ea  tira de prueba lista (solo preview)")
+            else:
+                print(f"  \U0001f39e\ufe0f  tira{_snum}.jpg → {strip_path}")
+                if _ingest and strip_path:
+                    asyncio.create_task(upload_to_eca360(_ingest, strip_path, self.broadcast))
             self.state         = "preview"
             self.preview_start = time.time()
             self.palm_cooldown = time.time() + 2.0
-            await self.broadcast({"type": "strip", "data": strip_b64, "session": _snum})
-            await self.broadcast({"type": "state", "state": "preview", "session": _snum})
+            await self.broadcast({
+                "type": "strip",
+                "data": strip_b64,
+                "session": _snum if not _is_test else None,
+                "test": _is_test,
+            })
+            await self.broadcast({
+                "type": "state",
+                "state": "preview",
+                "session": _snum if not _is_test else None,
+                "test": _is_test,
+            })
         else:
-            # Usar session_countdown (configurado del evento) para el intervalo entre fotos
-            self.next_shot_at    = time.time() + self.session_countdown
             self._last_cdown_val = -1
-            await self.broadcast({"type":        "state",
-                                  "state":       "taking",
-                                  "photoCount":  self.photo_count,
-                                  "totalPhotos": self.session_burst})
+            if self.capture_mode == "manual":
+                # Esperar Espacio para la siguiente foto
+                self.state = "waiting"
+                await self.broadcast({
+                    "type": "state",
+                    "state": "waiting",
+                    "photoCount": self.photo_count,
+                    "totalPhotos": self.session_burst,
+                    "test": is_test,
+                    "captureMode": "manual",
+                })
+                print(f"  ⏸️  Manual: esperando Espacio ({self.photo_count}/{self.session_burst})")
+            else:
+                # Automático: intervalo del evento entre fotos
+                self.next_shot_at = time.time() + self.session_countdown
+                await self.broadcast({
+                    "type": "state",
+                    "state": "taking",
+                    "photoCount": self.photo_count,
+                    "totalPhotos": self.session_burst,
+                    "test": is_test,
+                    "captureMode": "auto",
+                })
 
     def _open_capture(self, index: int):
         """Abre la cámara; devuelve VideoCapture o None."""

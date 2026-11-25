@@ -35,6 +35,10 @@ export default function App() {
   const printTimerRef  = useRef(null)
   const [ingestMsg,    setIngestMsg]    = useState(null) // { phase, file, msg }
   const ingestTimerRef = useRef(null)
+  const [testSession,  setTestSession]  = useState(false)
+  const [captureMode,  setCaptureMode]  = useState('auto') // 'auto' | 'manual'
+  const [cancelToast,  setCancelToast]  = useState(null)
+  const cancelToastRef = useRef(null)
 
   // ── Handler WebSocket ────────────────────────────────────────────────────
   const handleMessage = useCallback((msg) => {
@@ -45,12 +49,19 @@ export default function App() {
         setAppState(msg.state || 'idle')
         setDebug(msg.debug || false)
         setActiveEvent(msg.activeEvent || null)
-        setTotalPhotos(msg.activeEvent?.photoCount ?? 3)
+        setTotalPhotos(msg.totalPhotos ?? msg.activeEvent?.photoCount ?? 3)
+        if (msg.captureMode) setCaptureMode(msg.captureMode)
+        if (msg.photoCount !== undefined) setPhotoCount(msg.photoCount)
+        if (msg.test !== undefined) setTestSession(!!msg.test)
         break
 
       case 'active_event':
         setActiveEvent(msg.activeEvent || null)
         setTotalPhotos(msg.activeEvent?.photoCount ?? 3)
+        break
+
+      case 'capture_mode':
+        if (msg.mode) setCaptureMode(msg.mode)
         break
 
       case 'frame':
@@ -71,8 +82,18 @@ export default function App() {
         setAppState(msg.state)
         if (msg.totalPhotos !== undefined) setTotalPhotos(msg.totalPhotos)
         if (msg.photoCount  !== undefined) setPhotoCount(msg.photoCount)
-        if (msg.state === 'idle')      { setStrip(null); setPhotoCount(0); setTakenPhotos([]) }
-        if (msg.state === 'countdown') { setTakenPhotos([]) }   // reset al inicio de sesión
+        if (msg.test !== undefined) setTestSession(!!msg.test)
+        if (msg.captureMode !== undefined) setCaptureMode(msg.captureMode)
+        if (msg.state === 'idle') {
+          setStrip(null)
+          setPhotoCount(0)
+          setTakenPhotos([])
+          setTestSession(false)
+        }
+        // Solo resetear thumbs al arrancar sesión (foto 0), no al reanudar manual
+        if (msg.state === 'countdown' && !msg.photoCount) {
+          setTakenPhotos([])
+        }
         break
 
       case 'countdown':
@@ -100,6 +121,21 @@ export default function App() {
 
       case 'strip':
         setStrip(msg.data)
+        if (msg.test !== undefined) setTestSession(!!msg.test)
+        break
+
+      case 'session_cancelled':
+        setStrip(null)
+        setPhotoCount(0)
+        setTakenPhotos([])
+        setTestSession(false)
+        setCancelToast(
+          msg.test
+            ? 'Sesión de prueba cancelada'
+            : `Sesión cancelada${msg.photoCount ? ` · ${msg.photoCount} foto(s) borrada(s)` : ''}`
+        )
+        clearTimeout(cancelToastRef.current)
+        cancelToastRef.current = setTimeout(() => setCancelToast(null), 3500)
         break
 
       case 'print_start':
@@ -138,11 +174,23 @@ export default function App() {
   // ── Keyboard (en pantalla de inicio) ─────────────────────────────────────
   const handleKey = useCallback((e) => {
     if (e.key === 'd' || e.key === 'D') toggleDebug()
-    // Barra espaciadora: fallback para iniciar sesión si falla reconocimiento de manos
+    // Espacio: inicia sesión o siguiente foto (manual)
     if (e.code === 'Space' || e.key === ' ') {
       e.preventDefault()
-      if (appState === 'idle' || appState === 'mirror') {
+      if (appState === 'idle' || appState === 'mirror' || appState === 'waiting') {
         send({ type: 'start_session' })
+      }
+    }
+    // P: sesión de prueba (preview de tira, sin guardar / print / ingest)
+    if (e.key === 'p' || e.key === 'P') {
+      if (appState === 'idle' || appState === 'mirror') {
+        send({ type: 'start_session', test: true })
+      }
+    }
+    // C: cancelar sesión en curso (borra fotos locales)
+    if (e.key === 'c' || e.key === 'C') {
+      if (['countdown', 'taking', 'waiting', 'preview'].includes(appState)) {
+        send({ type: 'cancel_session' })
       }
     }
   }, [send, appState])
@@ -188,6 +236,23 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      {/* ── Toast sesión cancelada ─────────────────────────────────────── */}
+      <AnimatePresence>
+        {cancelToast && (
+          <motion.div
+            key="cancel-toast"
+            className="absolute top-16 left-1/2 -translate-x-1/2 z-[60]
+                       px-5 py-3 rounded-2xl bg-red-950/90 border border-red-500/40
+                       text-red-200 text-sm font-bold shadow-lg"
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+          >
+            ⛔ {cancelToast}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ── Overlay imprimiendo (para clientes) ─────────────────────────── */}
       <AnimatePresence>
         {printJob && (
@@ -310,13 +375,24 @@ export default function App() {
       {/* ── Controles de ventana (frameless) ────────────────────────── */}
       <div className="absolute top-3 right-3 z-50 flex items-center gap-2"
            style={{ WebkitAppRegion: 'no-drag' }}>
-        {/* Badge del evento activo */}
+        {/* Badge del evento + modo sesión */}
         {activeEvent && (
           <span className="text-white/30 text-xs font-mono truncate max-w-[160px]"
             title={activeEvent.name}>
             {activeEvent.name}
           </span>
         )}
+        {testSession && appState !== 'idle' ? (
+          <span className="px-2.5 py-1 rounded-lg text-[11px] font-black uppercase tracking-wide
+                           bg-amber-500 text-black shadow-lg shadow-amber-500/40">
+            Sesión de prueba
+          </span>
+        ) : activeEvent ? (
+          <span className="px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wide
+                           text-white/35 bg-white/5 border border-white/10">
+            Real
+          </span>
+        ) : null}
         <button
           onClick={() => window.electronBridge?.returnToLauncher?.()}
           className="px-2.5 py-1 rounded-lg text-xs font-bold text-white/80
@@ -353,7 +429,7 @@ export default function App() {
           <CountdownOverlay
             key="countdown"
             value={countdown}
-            label={`Foto 1 / ${totalPhotos}`}
+            label={`Foto ${Math.min(photoCount + 1, totalPhotos)} / ${totalPhotos}${testSession ? ' · PRUEBA' : ''}${captureMode === 'manual' ? ' · Manual' : ''}`}
           />
         )}
 
@@ -366,8 +442,32 @@ export default function App() {
           />
         )}
 
+        {appState === 'waiting' && (
+          <motion.div
+            key="waiting"
+            className="absolute inset-0 z-30 flex flex-col items-center justify-end pb-16 pointer-events-none"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <div className={`glass rounded-2xl px-8 py-5 text-center border
+              ${testSession ? 'border-amber-400/40' : 'border-violet-400/30'}`}>
+              <p className={`font-bold text-sm uppercase tracking-widest
+                ${testSession ? 'text-amber-300' : 'text-violet-200'}`}>
+                {testSession ? 'Prueba · manual' : 'Modo manual'}
+              </p>
+              <h2 className="text-white font-black text-2xl mt-1">
+                Foto {photoCount} / {totalPhotos} lista
+              </h2>
+              <p className="text-white/50 text-sm mt-2">
+                Presiona <span className="text-white font-bold">ESPACIO</span> para la siguiente
+              </p>
+            </div>
+          </motion.div>
+        )}
+
         {appState === 'preview' && strip && (
-          <StripPreview key="preview" data={strip} />
+          <StripPreview key={testSession ? 'preview-test' : 'preview'} data={strip} test={testSession} />
         )}
       </AnimatePresence>
 
@@ -383,7 +483,7 @@ export default function App() {
 
       {/* ── Strip builder (fuera del AnimatePresence de estados) ─────── */}
       <AnimatePresence>
-        {(appState === 'taking' || appState === 'countdown') && (
+        {(appState === 'taking' || appState === 'countdown' || appState === 'waiting') && (
           <StripBuilder
             key="strip-builder"
             photos={takenPhotos}

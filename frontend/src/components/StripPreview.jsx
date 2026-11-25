@@ -3,9 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion'
 
 const API = 'http://localhost:8766'
 
-export default function StripPreview({ data }) {
-  const [autoCount, setAutoCount] = useState(5)
-  const [autoPhase, setAutoPhase] = useState('countdown')  // 'countdown' | 'collecting'
+export default function StripPreview({ data, test = false }) {
+  const [autoCount, setAutoCount] = useState(test ? 0 : 5)
+  const [autoPhase, setAutoPhase] = useState(test ? 'test' : 'countdown')  // 'countdown' | 'collecting' | 'test'
 
   const doPrintRef = useRef(null)
   doPrintRef.current = async () => {
@@ -20,11 +20,11 @@ export default function StripPreview({ data }) {
   }
 
   useEffect(() => {
-    if (autoPhase !== 'countdown') return
+    if (test || autoPhase !== 'countdown') return
     if (autoCount <= 0) { doPrintRef.current?.(); return }
     const t = setTimeout(() => setAutoCount(c => c - 1), 1000)
     return () => clearTimeout(t)
-  }, [autoCount, autoPhase])
+  }, [autoCount, autoPhase, test])
 
   return (
     <motion.div
@@ -73,15 +73,17 @@ export default function StripPreview({ data }) {
       >
         <div className="text-center">
           <h2 className="gradient-text-anim font-black text-3xl tracking-tight">
-            ¡Tus fotos están listas!
+            {test ? 'Sesión de prueba' : '¡Tus fotos están listas!'}
           </h2>
           <p className="text-white/40 text-sm mt-1">
-            Guardadas en la carpeta del evento
+            {test
+              ? 'Solo preview — no se guarda, no se imprime ni se sube'
+              : 'Guardadas en la carpeta del evento'}
           </p>
         </div>
 
         <motion.div
-          className="rounded-2xl overflow-hidden shadow-2xl glow-pink"
+          className={`rounded-2xl overflow-hidden shadow-2xl ${test ? 'ring-2 ring-amber-400/50' : 'glow-pink'}`}
           style={{ maxHeight: '55vh' }}
           transition={{ type: 'spring', damping: 20 }}
         >
@@ -118,6 +120,21 @@ export default function StripPreview({ data }) {
                 </motion.span>
               </AnimatePresence>
             </div>
+          </motion.div>
+        )}
+
+        {autoPhase === 'test' && (
+          <motion.div
+            className="glass rounded-2xl px-8 py-4 flex flex-col items-center gap-1 border border-amber-400/30"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <p className="text-amber-300/90 text-sm font-bold uppercase tracking-widest">
+              Modo prueba
+            </p>
+            <p className="text-white/45 text-xs">
+              Espacio = sesión real · P = otra prueba
+            </p>
           </motion.div>
         )}
       </motion.div>
