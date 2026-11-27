@@ -130,7 +130,8 @@ class EventsManager:
     def create_event(self, name: str, width: int, height: int,
                       photo_count: int = 3, timer_secs: int = 3,
                       template_id: str | None = None,
-                      ingest_url: str | None = None) -> dict:
+                      ingest_url: str | None = None,
+                      filter_id: str | None = None) -> dict:
         clean = slugify_event_name(name)
         eid = self._unique_id(clean)
         url = (ingest_url or "").strip() or None
@@ -142,6 +143,7 @@ class EventsManager:
             "photoCount":  max(1, min(int(photo_count), 10)),
             "timerSecs":   max(1, min(int(timer_secs),  30)),
             "templateId":  template_id,
+            "filterId":    filter_id or None,
             "ingestUrl":   url,
             "hasTemplate": False,
             "createdAt":   datetime.now().isoformat(),
@@ -161,6 +163,12 @@ class EventsManager:
                 # Permitir limpiar con "" / None
                 e["ingestUrl"] = (str(v).strip() if v else "") or None
                 continue
+            if k == "filterId":
+                e["filterId"] = (str(v).strip() if v else "") or None
+                continue
+            if k == "templateId":
+                e["templateId"] = (str(v).strip() if v else "") or None
+                continue
             if v is None:
                 continue
             if k == "name":
@@ -172,8 +180,6 @@ class EventsManager:
                 e["photoCount"] = max(1, min(int(v), 10))
             elif k == "timerSecs":
                 e["timerSecs"] = max(1, min(int(v), 30))
-            elif k == "templateId":
-                e["templateId"] = v if v else None
 
         if rename_to and rename_to != eid:
             new_id = self._unique_id(rename_to, exclude=eid)

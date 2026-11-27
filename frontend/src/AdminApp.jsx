@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import EventList    from './components/admin/EventList'
 import EventEditor  from './components/admin/EventEditor'
+import FiltersPanel from './components/admin/FiltersPanel'
 import HardwareSetup from './components/admin/HardwareSetup'
 import PrintConfig  from './components/admin/PrintConfig'
 import TemplateList from './components/admin/TemplateList'
@@ -55,7 +56,7 @@ function AdminAppInner() {
   const [selectedId, setSelectedId] = useState(null)  // null = modo "nuevo"
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState(null)
-  const [activeTab,  setActiveTab]  = useState('live')  // 'live' | 'events' | 'hardware' | 'print' | 'templates'
+  const [activeTab,  setActiveTab]  = useState('live')  // live|events|hardware|print|templates|filters
 
   // ── Estado de hardware (para el checklist) ────────────────────────────────
   const [hwConfig, setHwConfig] = useState({ camera: null, printer: null, loaded: false })
@@ -64,6 +65,9 @@ function AdminAppInner() {
   const [tplLoading,   setTplLoading]   = useState(false)
   const [selectedTplId, setSelectedTplId] = useState(null)  // id plantilla en editor
   const [creatingTpl,  setCreatingTpl]  = useState(false)   // mostrar formulario "nueva plantilla"
+  // ── Filtros LUT ────────────────────────────────────
+  const [filters, setFilters] = useState([])
+  const [filtersLoading, setFiltersLoading] = useState(false)
 
   const fetchTemplates = useCallback(async () => {
     setTplLoading(true)
@@ -75,6 +79,19 @@ function AdminAppInner() {
       setTemplates([])
     } finally {
       setTplLoading(false)
+    }
+  }, [])
+
+  const fetchFilters = useCallback(async () => {
+    setFiltersLoading(true)
+    try {
+      const r = await fetch(`${API}/api/filters`)
+      const j = await r.json()
+      setFilters(j.filters || [])
+    } catch {
+      setFilters([])
+    } finally {
+      setFiltersLoading(false)
     }
   }, [])
   const fetchHardware = useCallback(async () => {
@@ -230,6 +247,20 @@ function AdminAppInner() {
     if (dbState !== 'idle' && dbState !== 'mirror') return
     sendWs({ type: 'set_capture_mode', mode })
   }
+
+  const setActiveFilter = async (filterId) => {
+    if (!activeId) return
+    const r = await fetch(`${API}/api/events/${encodeURIComponent(activeId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filterId: filterId || '' }),
+    })
+    const j = await r.json()
+    if (!r.ok) throw new Error(j.error || 'No se pudo guardar el filtro')
+    setEvents(prev => prev.map(e => (e.id === activeId || e.id === j.id ? j : e)))
+    setLiveEvent(j)
+    if (j.id && j.id !== activeId) setActiveId(j.id)
+  }
   const cancelPrint = async () => {
     try {
       await fetch(`${API}/api/print/cancel`, { method: 'POST' })
@@ -281,6 +312,7 @@ function AdminAppInner() {
   useEffect(() => { fetchEvents() }, [fetchEvents])
   useEffect(() => { fetchHardware() }, [fetchHardware])
   useEffect(() => { fetchTemplates() }, [fetchTemplates])
+  useEffect(() => { fetchFilters() }, [fetchFilters])
 
   // ── Callbacks del editor ──────────────────────────────────────────────────
   const handleSaved = (updatedEvent, previousId) => {
@@ -453,6 +485,7 @@ function AdminAppInner() {
               { id: 'hardware',  label: '⚙️ Hardware'   },
               { id: 'print',     label: '🖨️ Impresión' },
               { id: 'templates', label: '📐 Plantillas' },
+              { id: 'filters',   label: '🎨 Filtros'    },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -492,6 +525,8 @@ function AdminAppInner() {
                     printJob={printJob}
                     captureMode={captureMode}
                     onCaptureModeChange={setCaptureModeRemote}
+                    filters={filters}
+                    onFilterChange={setActiveFilter}
                     testSession={testSession}
                     cancelMsg={cancelMsg}
                     onStartSession={startSession}
@@ -541,6 +576,7 @@ function AdminAppInner() {
                           onDeleted={handleDeleted}
                           onActivated={handleActivated}
                           templates={templates}
+                          filters={filters}
                         />
                       </motion.div>
                     </AnimatePresence>
@@ -574,7 +610,7 @@ function AdminAppInner() {
                 >
                   <PrintConfig />
                 </motion.div>
-              ) : (
+              ) : activeTab === 'templates' ? (
                 <motion.div
                   key="templates-tab"
                   className="flex flex-1 overflow-hidden"
@@ -612,6 +648,21 @@ function AdminAppInner() {
                       <p className={`text-sm ${t.textFaint}`}>Selecciona una plantilla o crea una nueva</p>
                     </div>
                   )}
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="filters-tab"
+                  className="flex flex-1 overflow-hidden"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                >
+                  <FiltersPanel
+                    filters={filters}
+                    loading={filtersLoading}
+                    onChanged={fetchFilters}
+                  />
                 </motion.div>
               )}
             </AnimatePresence>

@@ -39,6 +39,7 @@ import concurrent.futures
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from events_manager import EventsManager
 from templates_manager import TemplatesManager
+from filters_manager import FiltersManager
 from admin_api import start_admin_server
 from cabin360_api import start_cabin360_server
 from cabin360_manager import Cabin360Manager
@@ -368,6 +369,7 @@ class PhotoboothBackend:
         self.events_mgr      = EventsManager()
         self.events_mgr.deactivate()   # fuerza sin evento al iniciar
         self.templates_mgr   = TemplatesManager()
+        self.filters_mgr     = FiltersManager()
 
         # Gestos
         self.peace_held_since = None
@@ -559,19 +561,9 @@ class PhotoboothBackend:
                 self.test_session = False
                 await self.broadcast({"type": "state", "state": "idle", "test": False})
 
-        # Render — overlay + encode en executor para no bloquear el loop
-        active = self.events_mgr.get_active()
-        _evmgr = self.events_mgr
-
-        def _render():
-            # Solo aplicar overlay legado si no usa plantilla interactiva
-            if active and not active.get("templateId"):
-                d = _evmgr.apply_to_photo(frame, active["id"])
-            else:
-                d = frame
-            return to_b64(d)
-
-        frame_b64 = await loop.run_in_executor(self._executor, _render)
+        # Live: siempre el frame de cámara (sin crop/resize del evento).
+        # El WxH del evento + LUT solo aplican al disparar la foto.
+        frame_b64 = await loop.run_in_executor(self._executor, lambda: to_b64(frame))
 
         is_flash = now < self.flash_until
         await self.broadcast({
@@ -742,11 +734,18 @@ class PhotoboothBackend:
         evmgr       = self.events_mgr
         # Si el evento usa plantilla interactiva, omitir apply_to_photo (legacy overlay)
         has_interactive_tpl = bool(active and active.get("templateId"))
+        filter_id = (active or {}).get("filterId") or None
+        filters_mgr = self.filters_mgr
 
         def _process_and_save():
             photo = frame.copy()
+            # 1) LUT sobre el frame del vídeo (misma medida; solo color).
+            if filter_id:
+                photo = filters_mgr.apply_to_bgr(photo, filter_id)
+            # 2) Mismo pipeline que sin filtro: crop/resize a WxH del evento + overlay.
             if active and not has_interactive_tpl:
                 photo = evmgr.apply_to_photo(photo, active["id"])
+            # Miniatura solo para el flash/UI (no afecta el archivo guardado)
             th = 240
             tw = int(photo.shape[1] * th / photo.shape[0])
             _, tbuf = cv2.imencode(".jpg", cv2.resize(photo, (tw, th)),
@@ -769,10 +768,11 @@ class PhotoboothBackend:
         self.photo_count += 1
         self.photos_taken.append(photo)
         self.flash_until = time.time() + FLASH_SECS
+        filt_note = f" +filtro {filter_id}" if filter_id else ""
         if is_test:
-            print(f"  \U0001f9ea  prueba foto {self.photo_count}/{self.session_burst} (sin guardar)")
+            print(f"  \U0001f9ea  prueba foto {self.photo_count}/{self.session_burst} (sin guardar){filt_note}")
         else:
-            print(f"  \U0001f4f7  foto{session_num}_{self.photo_count}.jpg → {photo_path}")
+            print(f"  \U0001f4f7  foto{session_num}_{self.photo_count}.jpg → {photo_path}{filt_note}")
         await self.broadcast({
             "type": "flash",
             "photoNum": self.photo_count,
@@ -1025,6 +1025,7 @@ class PhotoboothBackend:
                 lambda: save_settings(self.settings),
                 self._apply_focus_settings,
                 self._open_camera_settings_dialog,
+                self.filters_mgr,
             )
             cabin360_mgr = Cabin360Manager()
             cabin360_runner = await start_cabin360_server(cabin360_mgr)

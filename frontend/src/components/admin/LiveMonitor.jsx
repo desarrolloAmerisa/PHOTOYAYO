@@ -49,6 +49,8 @@ export default function LiveMonitor({
   printJob,
   captureMode = 'auto',
   onCaptureModeChange,
+  filters = [],
+  onFilterChange,
   testSession = false,
   cancelMsg = null,
   onStartSession,
@@ -66,6 +68,7 @@ export default function LiveMonitor({
   const [queueCount, setQueueCount] = useState(0)
   const [clearing, setClearing]     = useState(false)
   const [showHelp, setShowHelp]     = useState(false)
+  const [filterBusy, setFilterBusy] = useState(false)
 
   const sessionActive = !['idle', 'mirror', 'connecting'].includes(appState)
   const canStart = !!activeId && (appState === 'idle' || appState === 'mirror' || appState === 'waiting')
@@ -74,6 +77,18 @@ export default function LiveMonitor({
   const meta = STATE_META[appState] || STATE_META.idle
   const slots = Math.max(1, totalPhotos || 3)
   const modeLocked = sessionActive
+  const activeFilterId = activeEvent?.filterId || ''
+  const activeFilter = filters.find(f => f.id === activeFilterId)
+
+  const handleFilterSelect = async (fid) => {
+    if (!activeId || modeLocked || filterBusy) return
+    setFilterBusy(true)
+    try {
+      await onFilterChange?.(fid || null)
+    } finally {
+      setFilterBusy(false)
+    }
+  }
 
   const fetchStrips = useCallback(async () => {
     if (!activeId) { setStrips([]); return }
@@ -157,72 +172,32 @@ export default function LiveMonitor({
   }
 
   return (
-    <div className="relative flex-1 flex min-h-0 overflow-hidden">
+    <div className="relative flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
       {/* ── Cámara + controles ─────────────────────────────────────────── */}
-      <div className={`w-[64%] min-w-[420px] flex flex-col border-r ${t.border} ${t.bgSidebar}`}>
-        <div className={`px-3 py-2 border-b ${t.border} flex items-center justify-between gap-3`}>
-          <div className="min-w-0">
+      <div className={`w-full lg:w-[64%] lg:min-w-[380px] min-h-[52%] lg:min-h-0 flex flex-col border-b lg:border-b-0 lg:border-r ${t.border} ${t.bgSidebar}`}>
+        {/* Header mínimo: evento + estado + ayuda */}
+        <div className={`px-3 py-2 border-b ${t.border} flex items-center gap-2`}>
+          <div className="min-w-0 flex-1">
             <p className={`text-[10px] uppercase tracking-widest font-bold ${t.textFaint}`}>En vivo</p>
-            <div className="flex items-center gap-2 min-w-0">
-              <p className={`text-sm font-bold truncate ${t.text}`}>{activeEvent?.name || activeId}</p>
-              {testSession && sessionActive ? (
-                <span className="flex-shrink-0 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wide
-                                 bg-amber-500 text-black">
-                  Prueba
-                </span>
-              ) : (
-                <span className={`flex-shrink-0 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wide
-                                  ${t.bgCard} ${t.textFaint}`}>
-                  Real
-                </span>
-              )}
-            </div>
+            <p className={`text-sm font-bold truncate ${t.text}`}>{activeEvent?.name || activeId}</p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <div
-              className={`flex rounded-lg overflow-hidden border text-[11px] font-bold
-                ${modeLocked ? 'opacity-55' : ''} ${t.borderMed}`}
-              title={modeLocked ? 'No se puede cambiar durante la sesión' : 'Modo de captura'}
-            >
-              <button
-                type="button"
-                disabled={modeLocked}
-                onClick={() => onCaptureModeChange?.('auto')}
-                className={`px-2.5 py-1 transition-colors ${
-                  captureMode === 'auto'
-                    ? 'bg-pink-600 text-white'
-                    : `${t.bgCard} ${t.textMuted} ${modeLocked ? '' : t.bgHover}`
-                } ${modeLocked ? 'cursor-not-allowed' : ''}`}
-              >
-                Automático
-              </button>
-              <button
-                type="button"
-                disabled={modeLocked}
-                onClick={() => onCaptureModeChange?.('manual')}
-                className={`px-2.5 py-1 transition-colors ${
-                  captureMode === 'manual'
-                    ? 'bg-violet-600 text-white'
-                    : `${t.bgCard} ${t.textMuted} ${modeLocked ? '' : t.bgHover}`
-                } ${modeLocked ? 'cursor-not-allowed' : ''}`}
-              >
-                Manual
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowHelp(true)}
-              className="px-2.5 py-1 rounded-lg text-[11px] font-bold border
-                         bg-sky-500/15 border-sky-400/40 text-sky-300
-                         hover:bg-sky-500/25 transition-colors"
-              title="Atajos y cómo usar la cabina"
-            >
-              ? Instrucciones
-            </button>
-            <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${meta.color}`}>
-              {meta.label}
-            </span>
-          </div>
+          <span className={`flex-shrink-0 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wide
+            ${testSession && sessionActive ? 'bg-amber-500 text-black' : `${t.bgCard} ${t.textFaint}`}`}>
+            {testSession && sessionActive ? 'Prueba' : 'Real'}
+          </span>
+          <span className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold ${meta.color}`}>
+            {meta.label}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowHelp(true)}
+            className={`flex-shrink-0 w-8 h-8 rounded-lg text-sm font-black border
+                        bg-sky-500/15 border-sky-400/35 text-sky-300 hover:bg-sky-500/25`}
+            title="Instrucciones y atajos"
+            aria-label="Instrucciones"
+          >
+            ?
+          </button>
         </div>
 
         <div className="relative flex-1 min-h-0 bg-black">
@@ -233,12 +208,10 @@ export default function LiveMonitor({
           />
           {testSession && sessionActive && (
             <div className="absolute top-3 left-3 right-3 z-10 pointer-events-none">
-              <div className="mx-auto max-w-lg rounded-xl bg-amber-500 text-black px-4 py-2 text-center
+              <div className="mx-auto max-w-sm rounded-lg bg-amber-500 text-black px-3 py-1.5 text-center
                               shadow-lg shadow-amber-500/30">
-                <p className="font-black text-sm uppercase tracking-widest">Sesión de prueba</p>
-                <p className="text-[11px] font-semibold opacity-80">
-                  No se guarda · no se imprime · no se sube
-                </p>
+                <p className="font-black text-xs uppercase tracking-widest">Sesión de prueba</p>
+                <p className="text-[10px] font-semibold opacity-80">No guarda · no imprime · no sube</p>
               </div>
             </div>
           )}
@@ -248,14 +221,14 @@ export default function LiveMonitor({
             </div>
           )}
           {isWaiting && (
-            <div className="absolute inset-x-0 bottom-0 p-4 pointer-events-none">
-              <div className={`mx-auto max-w-md rounded-xl bg-black/70 px-4 py-3 text-center border
+            <div className="absolute inset-x-0 bottom-0 p-3 pointer-events-none">
+              <div className={`mx-auto max-w-sm rounded-xl bg-black/70 px-3 py-2.5 text-center border
                 ${testSession ? 'border-amber-400/50' : 'border-violet-400/40'}`}>
                 <p className={`font-bold text-sm ${testSession ? 'text-amber-200' : 'text-violet-200'}`}>
                   Foto {photoCount}/{slots} lista{testSession ? ' · prueba' : ''}
                 </p>
                 <p className="text-white/70 text-xs mt-0.5">
-                  Espacio o ▶ para la siguiente ({activeEvent?.timerSecs ?? 3} s)
+                  Espacio o ▶ · {activeEvent?.timerSecs ?? 3} s
                 </p>
               </div>
             </div>
@@ -276,74 +249,133 @@ export default function LiveMonitor({
           )}
         </div>
 
-        <div className={`px-3 py-2.5 border-t ${t.border} flex items-center gap-2`}>
-          <button
-            onClick={onStartSession}
-            disabled={!canStart}
-            className={`flex-1 py-3 rounded-xl text-sm font-bold transition-colors
-              ${canStart
-                ? isWaiting
-                  ? 'bg-violet-600 hover:bg-violet-500 text-white'
-                  : 'bg-gradient-to-r from-pink-600 to-[#CC0000] text-white hover:from-pink-500 hover:to-[#990000]'
-                : `${t.bgCard} ${t.textFaint} cursor-not-allowed`}`}
-          >
-            {isWaiting
-              ? `▶ Siguiente foto (${photoCount + 1}/${slots})`
-              : '▶ Sesión real'}
-          </button>
-          <button
-            onClick={onStartTestSession}
-            disabled={!canTest}
-            className={`px-3 py-3 rounded-xl text-xs font-bold transition-colors border
-              ${canTest
-                ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
-                : `${t.bgCard} ${t.textFaint} border-transparent cursor-not-allowed`}`}
-            title="Prueba: preview sin guardar, imprimir ni subir (tecla P)"
-          >
-            🧪 Prueba
-          </button>
-          <button
-            type="button"
-            onClick={() => onCancelSession?.()}
-            disabled={!sessionActive}
-            className={`px-3 py-3 rounded-xl text-xs font-bold transition-colors border
-              ${sessionActive
-                ? 'bg-red-600/20 border-red-500/40 text-red-300 hover:bg-red-600/35'
-                : `${t.bgCard} ${t.textFaint} border-transparent cursor-not-allowed`}`}
-            title="Cancelar sesión y borrar fotos (tecla C)"
-          >
-            ✕ Cancelar
-          </button>
-          <button
-            onClick={handleClearQueue}
-            disabled={clearing}
-            className={`px-3 py-3 rounded-xl text-xs font-bold transition-colors
-              ${queueCount > 0
-                ? 'bg-red-600 hover:bg-red-500 text-white'
-                : `${t.bgCard} ${t.textMuted} ${t.bgHover}`}`}
-            title="Vacía todos los trabajos de la impresora"
-          >
-            {clearing ? 'Vaciando…' : queueCount > 0 ? `Vaciar cola (${queueCount})` : 'Vaciar cola'}
-          </button>
-          <div className={`text-right text-xs ${t.textMuted} min-w-[7.5rem]`}>
-            <p className="font-mono font-bold">
-              Foto {Math.min(photoCount, slots)} / {slots}
+        {/* Dock: opciones + acciones, se apila en pantallas estrechas */}
+        <div className={`border-t ${t.border} px-3 py-2.5 flex flex-col gap-2`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              className={`flex rounded-lg overflow-hidden border text-[11px] font-bold ${t.borderMed}
+                ${modeLocked ? 'opacity-50' : ''}`}
+              title={modeLocked ? 'No se puede cambiar durante la sesión' : 'Modo de captura'}
+            >
+              <button
+                type="button"
+                disabled={modeLocked}
+                onClick={() => onCaptureModeChange?.('auto')}
+                className={`px-2.5 py-1.5 transition-colors ${
+                  captureMode === 'auto'
+                    ? 'bg-pink-600 text-white'
+                    : `${t.bgCard} ${t.textMuted} ${modeLocked ? '' : t.bgHover}`
+                } ${modeLocked ? 'cursor-not-allowed' : ''}`}
+              >
+                Auto
+              </button>
+              <button
+                type="button"
+                disabled={modeLocked}
+                onClick={() => onCaptureModeChange?.('manual')}
+                className={`px-2.5 py-1.5 transition-colors ${
+                  captureMode === 'manual'
+                    ? 'bg-violet-600 text-white'
+                    : `${t.bgCard} ${t.textMuted} ${modeLocked ? '' : t.bgHover}`
+                } ${modeLocked ? 'cursor-not-allowed' : ''}`}
+              >
+                Manual
+              </button>
+            </div>
+
+            <select
+              value={activeFilterId}
+              disabled={modeLocked || filterBusy || filters.length === 0}
+              onChange={e => handleFilterSelect(e.target.value)}
+              title={
+                filters.length === 0
+                  ? 'Crea filtros en 🎨 Filtros'
+                  : modeLocked
+                    ? 'No se puede cambiar durante la sesión'
+                    : 'Filtro LUT (solo al disparar)'
+              }
+              className={`min-w-0 flex-1 sm:flex-none sm:max-w-[11rem] rounded-lg px-2 py-1.5 text-[11px] font-bold
+                border focus:outline-none
+                ${activeFilterId
+                  ? 'bg-fuchsia-600/20 border-fuchsia-400/40 text-fuchsia-200'
+                  : `${t.bgCard} ${t.borderMed} ${t.textMuted}`}
+                ${(modeLocked || filterBusy || filters.length === 0) ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <option value="">{filters.length === 0 ? 'Sin filtros' : 'Sin filtro'}</option>
+              {filters.map(f => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+
+            <p className={`ml-auto text-[11px] font-mono font-bold ${t.textMuted}`}>
+              {Math.min(photoCount, slots)}/{slots}
+              <span className={`ml-1.5 font-sans font-semibold ${t.textFaint}`}>
+                {cancelMsg
+                  ? cancelMsg
+                  : testSession && sessionActive
+                    ? 'prueba'
+                    : captureMode === 'manual'
+                      ? 'manual'
+                      : 'auto'}
+              </span>
             </p>
-            <p className={t.textFaint}>
-              {cancelMsg
-                ? cancelMsg
-                : testSession && sessionActive
-                  ? 'En prueba · C cancela'
-                  : captureMode === 'manual'
-                    ? 'Manual · C cancela'
-                    : 'Espacio real · P prueba · C cancela'}
-            </p>
+          </div>
+
+          <div className="flex flex-wrap items-stretch gap-2">
+            <button
+              onClick={onStartSession}
+              disabled={!canStart}
+              className={`flex-1 min-w-[8rem] py-2.5 rounded-xl text-sm font-bold transition-colors
+                ${canStart
+                  ? isWaiting
+                    ? 'bg-violet-600 hover:bg-violet-500 text-white'
+                    : 'bg-gradient-to-r from-pink-600 to-[#CC0000] text-white hover:from-pink-500 hover:to-[#990000]'
+                  : `${t.bgCard} ${t.textFaint} cursor-not-allowed`}`}
+            >
+              {isWaiting ? `▶ Siguiente (${photoCount + 1}/${slots})` : '▶ Sesión'}
+            </button>
+            <button
+              onClick={onStartTestSession}
+              disabled={!canTest}
+              className={`px-3 py-2.5 rounded-xl text-xs font-bold transition-colors border
+                ${canTest
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
+                  : `${t.bgCard} ${t.textFaint} border-transparent cursor-not-allowed`}`}
+              title="Prueba · tecla P"
+            >
+              🧪
+            </button>
+            <button
+              type="button"
+              onClick={() => onCancelSession?.()}
+              disabled={!sessionActive}
+              className={`px-3 py-2.5 rounded-xl text-xs font-bold transition-colors border
+                ${sessionActive
+                  ? 'bg-red-600/20 border-red-500/40 text-red-300 hover:bg-red-600/35'
+                  : `${t.bgCard} ${t.textFaint} border-transparent cursor-not-allowed`}`}
+              title="Cancelar · tecla C"
+            >
+              ✕
+            </button>
+            <button
+              onClick={handleClearQueue}
+              disabled={clearing}
+              className={`px-3 py-2.5 rounded-xl text-xs font-bold transition-colors
+                ${queueCount > 0
+                  ? 'bg-red-600 hover:bg-red-500 text-white'
+                  : `${t.bgCard} ${t.textMuted} ${t.bgHover}`}`}
+              title="Vaciar cola de impresión"
+            >
+              {clearing ? '…' : queueCount > 0 ? `Cola ${queueCount}` : 'Cola'}
+            </button>
           </div>
         </div>
       </div>
 
       {/* ── Sesión + galería ───────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
         <div className={`px-4 py-3 border-b ${t.border} flex-shrink-0`}>
           <p className={`text-[10px] uppercase tracking-widest font-bold ${t.textFaint}`}>Sesión actual</p>
           <div className="mt-3 flex items-end gap-2 overflow-x-auto pb-1">
@@ -551,6 +583,17 @@ export default function LiveMonitor({
                     <li>En manual: cuenta del temporizador del evento → foto → espera → <kbd className="px-1 rounded bg-white/10 text-xs">Espacio</kbd> otra vez, hasta completar.</li>
                     <li>Al final ves la tira; en sesión real se imprime y se sube al ingest si hay URL.</li>
                   </ol>
+                </section>
+
+                <section className="mb-4">
+                  <p className={`text-[10px] uppercase tracking-widest font-bold mb-2 ${t.textFaint}`}>
+                    Filtro LUT
+                  </p>
+                  <p className={`text-sm leading-relaxed ${t.textMuted}`}>
+                    En la barra de En vivo elige el filtro (o “Sin filtro”). Se aplica solo al
+                    disparar la foto; el preview en vivo no cambia. Los .cube se dan de alta en
+                    la pestaña <span className={t.text}>🎨 Filtros</span>.
+                  </p>
                 </section>
 
                 <section className="mb-4">

@@ -248,7 +248,7 @@ function TemplateSection({ event, onSaved }) {
 
 // ── Editor principal ──────────────────────────────────────────────────────────
 
-export default function EventEditor({ event, activeId, onSaved, onDeleted, onActivated, templates = [] }) {
+export default function EventEditor({ event, activeId, onSaved, onDeleted, onActivated, templates = [], filters = [] }) {
   const { t } = useTheme()
   const [name,       setName]       = useState('')
   const [width,      setWidth]      = useState(600)
@@ -256,6 +256,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
   const [photoCount, setPhotoCount] = useState(3)
   const [timerSecs,  setTimerSecs]  = useState(3)
   const [templateId, setTemplateId] = useState(null)   // id de plantilla interactiva
+  const [filterId,   setFilterId]   = useState(null)   // id filtro LUT .cube
   const [ingestUrl,  setIngestUrl]  = useState('')     // ECA360 carousel ingest
 
   const [saving,     setSaving]     = useState(false)
@@ -273,10 +274,11 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
       setPhotoCount(event.photoCount ?? 3)
       setTimerSecs(event.timerSecs ?? 3)
       setTemplateId(event.templateId ?? null)
+      setFilterId(event.filterId ?? null)
       setIngestUrl(event.ingestUrl ?? '')
     } else {
       setName(''); setWidth(600); setHeight(600)
-      setPhotoCount(3); setTimerSecs(3); setTemplateId(null); setIngestUrl('')
+      setPhotoCount(3); setTimerSecs(3); setTemplateId(null); setFilterId(null); setIngestUrl('')
     }
     setError(null); setSuccess(null)
   }, [event?.id])
@@ -299,6 +301,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
           photoCount: parseInt(photoCount),
           timerSecs:  parseInt(timerSecs),
           templateId: templateId || null,
+          filterId:   filterId || null,
           ingestUrl:  ingestUrl.trim() || null,
         }),
       })
@@ -389,6 +392,27 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
                       </option>
                     )
                   })}
+                </select>
+              )}
+            </Field>
+
+            <Field label="Filtro LUT (.cube)" hint="opcional · solo en la foto">
+              {filters.length === 0 ? (
+                <p className={`${t.hint} text-xs`}>
+                  Sube filtros en el tab <strong>🎨 Filtros</strong>.
+                </p>
+              ) : (
+                <select
+                  value={filterId ?? ''}
+                  onChange={e => setFilterId(e.target.value || null)}
+                  className={`w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none ${t.input}`}
+                >
+                  <option value="">— Sin filtro —</option>
+                  {filters.map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}{f.size ? ` · ${f.size}³` : ''}
+                    </option>
+                  ))}
                 </select>
               )}
             </Field>
@@ -547,6 +571,32 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
 
         {/* Separador */}
         <div className={`border-t ${t.divider} pt-2`} />
+
+        {/* Filtro LUT */}
+        <div>
+          <label className={`block ${t.label} text-xs font-semibold tracking-wide uppercase mb-1.5`}>
+            Filtro LUT (.cube)
+            <span className={`normal-case font-normal ml-2 ${t.hint}`}>solo al tomar la foto</span>
+          </label>
+          {filters.length === 0 ? (
+            <p className={`${t.hint} text-xs`}>
+              Aún no hay filtros. Súbelos en el tab <strong>🎨 Filtros</strong>.
+            </p>
+          ) : (
+            <select
+              value={filterId ?? ''}
+              onChange={e => setFilterId(e.target.value || null)}
+              className={`w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none ${t.input}`}
+            >
+              <option value="">— Sin filtro —</option>
+              {filters.map(f => (
+                <option key={f.id} value={f.id}>
+                  {f.name}{f.size ? ` · ${f.size}³` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
 
         {/* Plantilla interactiva */}
         <div>

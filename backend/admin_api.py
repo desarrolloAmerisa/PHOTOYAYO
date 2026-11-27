@@ -1,39 +1,8 @@
 """
 Admin API HTTP — aiohttp en puerto 8766.
-//caca
-Endpoints:
-  GET    /api/events
-  POST   /api/events
-  PUT    /api/events/{id}
-  DELETE /api/events/{id}
-  POST   /api/events/{id}/activate
-  DELETE /api/events/{id}/activate
-  GET    /api/events/{id}/template
-  POST   /api/events/{id}/template
-  DELETE /api/events/{id}/template
-  GET    /api/active
-  GET    /api/cameras
-  POST   /api/cameras/select
-  GET    /api/focus-config
-  POST   /api/focus-config
-  POST   /api/cameras/settings-dialog
-  GET    /api/printers
-  POST   /api/printers/select
-  POST   /api/print
-  POST   /api/print/cancel
-  GET    /api/print/queue
-  POST   /api/print-preview
-  GET    /api/print-config
-  POST   /api/print-config
-  GET    /api/events/{id}/strips
-  GET    /api/events/{id}/strips/{n}
-  GET    /api/templates
-  POST   /api/templates
-  PUT    /api/templates/{id}
-  DELETE /api/templates/{id}
-  GET    /api/templates/{id}/background
-  POST   /api/templates/{id}/background
-  DELETE /api/templates/{id}/background
+
+Endpoints principales:
+  /api/events, /api/templates, /api/filters, /api/print, /api/cameras, …
 """
 
 import io
@@ -426,7 +395,7 @@ def _cors() -> dict:
     return {
         "Access-Control-Allow-Origin":  "*",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
     }
 
 
@@ -452,11 +421,13 @@ def make_admin_app(
     on_settings_save=None,
     on_focus_apply=None,
     on_camera_settings_dialog=None,
+    fm=None,
 ) -> web.Application:
     """Construye la aplicación aiohttp para el panel de administración.
 
     em               — EventsManager.
     tm               — TemplatesManager.
+    fm               — FiltersManager (.cube LUT).
     settings_ref     — dict mutable compartido para persistir cámara/impresora.
     on_camera_change — coroutine(index) para reiniciar VideoCapture en caliente.
     on_settings_save — callable() que persiste settings_ref a disco.
@@ -502,8 +473,12 @@ def make_admin_app(
         if not (50 <= width <= 8000) or not (50 <= height <= 8000):
             return _err("Dimensiones inválidas (50 – 8 000 px)")
         template_id = body.get("templateId") or None
+        filter_id   = body.get("filterId") or None
         ingest_url  = body.get("ingestUrl") or None
-        return _ok(em.create_event(name, width, height, photo_count, timer_secs, template_id, ingest_url), 201)
+        return _ok(em.create_event(
+            name, width, height, photo_count, timer_secs,
+            template_id, ingest_url, filter_id,
+        ), 201)
 
     # ── Actualizar / eliminar evento ──────────────────────────────────────────
     async def update_event(request):
@@ -512,16 +487,17 @@ def make_admin_app(
             body = await request.json()
         except Exception:
             return _err("JSON inválido")
-        kwargs = dict(
-            name=body.get("name"),
-            width=body.get("width"),
-            height=body.get("height"),
-            photoCount=body.get("photoCount"),
-            timerSecs=body.get("timerSecs"),
-            templateId=body.get("templateId"),  # puede ser None para limpiar
-        )
+        # Solo tocar campos presentes en el body (PUT parcial no borra plantilla/filtro).
+        kwargs = {}
+        for key in ("name", "width", "height", "photoCount", "timerSecs"):
+            if key in body:
+                kwargs[key] = body[key]
+        if "templateId" in body:
+            kwargs["templateId"] = body.get("templateId") or ""
         if "ingestUrl" in body:
             kwargs["ingestUrl"] = body.get("ingestUrl") or ""
+        if "filterId" in body:
+            kwargs["filterId"] = body.get("filterId") or ""
         result = em.update_event(eid, **kwargs)
         return _ok(result) if result else _err("Evento no encontrado", 404)
 
@@ -1123,7 +1099,8 @@ def make_admin_app(
         )
 
     # ── Routing ───────────────────────────────────────────────────────────────
-    app = web.Application()
+    # client_max_size alto: .cube / plantillas / fotos pueden pasar de 1 MB
+    app = web.Application(client_max_size=MAX_UPLOAD)
     app.router.add_route("OPTIONS", "/{path_info:.*}",          handle_options)
     app.router.add_get(    "/api/events",                        get_events)
     app.router.add_post(   "/api/events",                        create_event)
@@ -1160,6 +1137,84 @@ def make_admin_app(
     app.router.add_get(    "/api/templates/{id}/background",     get_tpl_background)
     app.router.add_post(   "/api/templates/{id}/background",     upload_tpl_background)
     app.router.add_delete( "/api/templates/{id}/background",     delete_tpl_background)
+
+    # ── Filtros LUT .cube ─────────────────────────────────────────────────────
+    async def list_filters(request):
+        if fm is None:
+            return _ok({"filters": []})
+        return _ok({"filters": fm.list_filters()})
+
+    async def create_filter(request):
+        if fm is None:
+            return _err("FiltersManager no disponible", 503)
+        try:
+            reader = await request.multipart()
+        except Exception:
+            return _err("Se esperaba multipart (name + file .cube)")
+        name = ""
+        cube_bytes = b""
+        while True:
+            field = await reader.next()
+            if field is None:
+                break
+            if field.name == "name":
+                name = (await field.text()).strip()
+            elif field.name in ("file", "cube", "lut") or (field.filename or "").lower().endswith(".cube"):
+                cube_bytes = await field.read(decode=False)
+        meta, err = fm.create_filter(name, cube_bytes)
+        if err:
+            return _err(err)
+        return _ok(meta, 201)
+
+    async def update_filter(request):
+        if fm is None:
+            return _err("FiltersManager no disponible", 503)
+        fid = request.match_info["id"]
+        ctype = (request.content_type or "").lower()
+        name = None
+        cube_bytes = None
+        if "multipart" in ctype:
+            reader = await request.multipart()
+            while True:
+                field = await reader.next()
+                if field is None:
+                    break
+                if field.name == "name":
+                    name = (await field.text()).strip()
+                elif field.name in ("file", "cube", "lut") or (field.filename or "").lower().endswith(".cube"):
+                    cube_bytes = await field.read(decode=False)
+        else:
+            try:
+                body = await request.json()
+            except Exception:
+                return _err("JSON o multipart inválido")
+            if "name" in body:
+                name = body.get("name")
+        meta, err = fm.update_filter(fid, name=name, cube_bytes=cube_bytes)
+        if err:
+            return _err(err, 404 if err == "Filtro no encontrado" else 400)
+        return _ok(meta)
+
+    async def delete_filter(request):
+        if fm is None:
+            return _err("FiltersManager no disponible", 503)
+        fid = request.match_info["id"]
+        return _ok({"ok": True}) if fm.delete_filter(fid) else _err("Filtro no encontrado", 404)
+
+    async def download_filter_cube(request):
+        if fm is None:
+            return _err("FiltersManager no disponible", 503)
+        fid = request.match_info["id"]
+        path = fm.cube_path(fid)
+        if not path:
+            return _err("Archivo .cube no encontrado", 404)
+        return web.FileResponse(path, headers={**_cors(), "Content-Type": "text/plain"})
+
+    app.router.add_get(    "/api/filters",                       list_filters)
+    app.router.add_post(   "/api/filters",                       create_filter)
+    app.router.add_put(    "/api/filters/{id}",                  update_filter)
+    app.router.add_delete( "/api/filters/{id}",                  delete_filter)
+    app.router.add_get(    "/api/filters/{id}/cube",             download_filter_cube)
     return app
 
 
@@ -1172,12 +1227,14 @@ async def start_admin_server(
     on_settings_save=None,
     on_focus_apply=None,
     on_camera_settings_dialog=None,
+    fm=None,
 ) -> web.AppRunner:
     runner = web.AppRunner(
         make_admin_app(
             em, tm, broadcast_fn, settings_ref,
             on_camera_change, on_settings_save,
             on_focus_apply, on_camera_settings_dialog,
+            fm,
         )
     )
     await runner.setup()
