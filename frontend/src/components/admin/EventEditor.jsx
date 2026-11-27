@@ -422,7 +422,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
                 <Field label="Fotos por sesión" hint="1–10">
                   <Input type="number" value={photoCount} onChange={setPhotoCount} min={1} max={10} />
                 </Field>
-                <Field label="Temporizador" hint="seg (1–30)">
+                <Field label="Temporizador" hint="solo Auto · Manual = 3 s">
                   <Input type="number" value={timerSecs}  onChange={setTimerSecs}  min={1} max={30} />
                 </Field>
               </div>
@@ -437,7 +437,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
                     {tplPhotoCount ?? '–'} <span className={`text-xs ${t.textFaint}`}>(definido por plantilla)</span>
                   </div>
                 </div>
-                <Field label="Temporizador" hint="seg (1–30)">
+                <Field label="Temporizador" hint="solo Auto · Manual = 3 s">
                   <Input type="number" value={timerSecs}  onChange={setTimerSecs}  min={1} max={30} />
                 </Field>
               </div>
@@ -539,7 +539,7 @@ export default function EventEditor({ event, activeId, onSaved, onDeleted, onAct
             <Field label="Fotos por sesión" hint="1–10">
               <Input type="number" value={photoCount} onChange={setPhotoCount} min={1} max={10} />
             </Field>
-            <Field label="Temporizador" hint="seg (1–30)">
+            <Field label="Temporizador" hint="solo Auto · Manual = 3 s">
               <Input type="number" value={timerSecs}  onChange={setTimerSecs}  min={1} max={30} />
             </Field>
           </div>

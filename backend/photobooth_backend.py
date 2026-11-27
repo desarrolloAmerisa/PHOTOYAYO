@@ -59,6 +59,8 @@ WS_PORT        = 8765
 BURST_COUNT    = 3
 PHOTO_INTERVAL = 5.0
 COUNTDOWN_SECS = 3
+# Manual: cuenta fija (el timerSecs del evento solo aplica en automático)
+MANUAL_COUNTDOWN_SECS = 3
 PREVIEW_SECS   = 8
 PALM_HOLD_SECS = 0.6
 FLASH_SECS     = 0.25
@@ -378,7 +380,7 @@ class PhotoboothBackend:
         # Config de la sesión actual
         self.session_burst     = BURST_COUNT
         self.session_countdown = COUNTDOWN_SECS
-        # auto = ráfaga con timer del evento; manual = Espacio → 10s → foto → espera
+        # auto = ráfaga con timer del evento; manual = Espacio → 3s → foto → espera
         self.capture_mode      = "auto"
 
         # Anti-spam de countdown
@@ -600,8 +602,13 @@ class PhotoboothBackend:
             self.session_burst = active.get("photoCount", BURST_COUNT)
         else:
             self.session_burst = BURST_COUNT
-        # Auto y manual usan el temporizador del evento (timerSecs)
-        self.session_countdown = active.get("timerSecs", COUNTDOWN_SECS) if active else COUNTDOWN_SECS
+        # Auto: timerSecs del evento. Manual: siempre 3 s.
+        if self.capture_mode == "manual":
+            self.session_countdown = MANUAL_COUNTDOWN_SECS
+        else:
+            self.session_countdown = (
+                active.get("timerSecs", COUNTDOWN_SECS) if active else COUNTDOWN_SECS
+            )
         if self.test_session:
             # Prueba: no toca carpetas del evento ni numera sesión real
             self.session_dir = None
@@ -631,15 +638,14 @@ class PhotoboothBackend:
             print(f"\n📸  Sesión {self.session_num} [{mode_lbl}] ({self.session_burst} fotos, {self.session_countdown}s) → {self.session_dir}")
 
     async def _resume_manual_shot(self):
-        """Espacio en modo manual: cuenta atrás con timerSecs del evento."""
+        """Espacio en modo manual: cuenta atrás fija de 3 s (no usa timerSecs)."""
         if self.capture_mode != "manual" or self.state != "waiting":
             return
         if self.photo_count >= self.session_burst:
             return
-        active = self.events_mgr.get_active()
         self.state = "countdown"
         self.session_start = time.time()
-        self.session_countdown = active.get("timerSecs", COUNTDOWN_SECS) if active else COUNTDOWN_SECS
+        self.session_countdown = MANUAL_COUNTDOWN_SECS
         self._last_cdown_val = -1
         await self.broadcast({
             "type": "state",

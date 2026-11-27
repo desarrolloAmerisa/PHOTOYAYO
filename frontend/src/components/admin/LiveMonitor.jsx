@@ -228,7 +228,7 @@ export default function LiveMonitor({
                   Foto {photoCount}/{slots} lista{testSession ? ' · prueba' : ''}
                 </p>
                 <p className="text-white/70 text-xs mt-0.5">
-                  Espacio o ▶ · {activeEvent?.timerSecs ?? 3} s
+                  Espacio o ▶ · 3 s
                 </p>
               </div>
             </div>
@@ -580,7 +580,7 @@ export default function LiveMonitor({
                     <li>Elige <span className={t.text}>Automático</span> o <span className={t.text}>Manual</span> (solo antes de empezar).</li>
                     <li>Pulsa <span className={t.text}>Sesión real</span> o <kbd className="px-1 rounded bg-white/10 text-xs">Espacio</kbd>.</li>
                     <li>En automático la cabina toma todas las fotos sola.</li>
-                    <li>En manual: cuenta del temporizador del evento → foto → espera → <kbd className="px-1 rounded bg-white/10 text-xs">Espacio</kbd> otra vez, hasta completar.</li>
+                    <li>En manual: cuenta fija de 3 s → foto → espera → <kbd className="px-1 rounded bg-white/10 text-xs">Espacio</kbd> otra vez, hasta completar. El temporizador del evento solo aplica en Automático.</li>
                     <li>Al final ves la tira; en sesión real se imprime y se sube al ingest si hay URL.</li>
                   </ol>
                 </section>
