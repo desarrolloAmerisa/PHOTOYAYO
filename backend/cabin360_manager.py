@@ -489,15 +489,17 @@ class Cabin360Manager:
             self._set(job, "framing", 50, "Aplicando marco…")
 
             def _frame():
+                # Conservar audio del video (0:a? = opcional si el origen no trae pista)
                 # ffmpeg 7: scale2ref está deprecado y a veces deja MP4 vacío con exit 0
                 cmd = [
                     self.ffmpeg, "-y",
                     "-i", str(compressed),
                     "-i", str(frame),
                     "-filter_complex",
-                    "[1:v][0:v]scale=rw:rh[ov];[0:v][ov]overlay=0:0",
+                    "[1:v][0:v]scale=rw:rh[ov];[0:v][ov]overlay=0:0[vout]",
+                    "-map", "[vout]", "-map", "0:a?",
                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                    "-an",
+                    "-c:a", "aac", "-b:a", "128k",
                     "-movflags", "+faststart",
                     str(processed),
                 ]
@@ -513,9 +515,10 @@ class Cabin360Manager:
                         "-filter_complex",
                         "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[base];"
                         "[1:v][base]scale=rw:rh[ov];"
-                        "[base][ov]overlay=0:0",
+                        "[base][ov]overlay=0:0[vout]",
+                        "-map", "[vout]", "-map", "0:a?",
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                        "-an",
+                        "-c:a", "aac", "-b:a", "128k",
                         "-movflags", "+faststart",
                         str(processed),
                     ]
@@ -564,28 +567,35 @@ class Cabin360Manager:
             self._set(job, "done", 100, "Procesado (sin URL de ingest — solo local)")
             return
 
-        self._set(job, "uploading", 85, "Subiendo video…")
-        ok, msg = await self._upload_file(ingest, processed, "video/mp4")
+        # Nombre remoto: stem del original (no "processed.mp4" / "thumb.jpg" para todos)
+        stem = _INVALID.sub("", (job.get("name") or Path(job.get("originalName") or "video").stem)).strip(" .") or "video"
+        upload_video_name = f"{stem}.mp4"
+        upload_thumb_name = f"{stem}.jpg"
+
+        self._set(job, "uploading", 85, f"Subiendo {upload_video_name}…")
+        ok, msg = await self._upload_file(ingest, processed, "video/mp4", filename=upload_video_name)
         if not ok:
             self._set(job, "error", 85, f"Error al subir video: {msg}", msg)
             return
 
-        self._set(job, "uploading_thumb", 93, "Subiendo miniatura…")
-        ok, msg = await self._upload_file(ingest, thumb, "image/jpeg")
+        self._set(job, "uploading_thumb", 93, f"Subiendo {upload_thumb_name}…")
+        ok, msg = await self._upload_file(ingest, thumb, "image/jpeg", filename=upload_thumb_name)
         if not ok:
             self._set(job, "error", 93, f"Video OK, thumb falló: {msg}", msg)
             return
 
         self._set(job, "done", 100, "Listo")
 
-    async def _upload_file(self, url: str, path: Path, content_type: str) -> tuple[bool, str]:
+    async def _upload_file(
+        self, url: str, path: Path, content_type: str, filename: str | None = None,
+    ) -> tuple[bool, str]:
         try:
             from aiohttp import FormData, ClientSession, ClientTimeout
             data = FormData()
             data.add_field(
                 "file",
                 path.read_bytes(),
-                filename=path.name,
+                filename=filename or path.name,
                 content_type=content_type,
             )
             timeout = ClientTimeout(total=300, connect=20)
